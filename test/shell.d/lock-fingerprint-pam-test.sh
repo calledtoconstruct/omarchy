@@ -15,7 +15,7 @@ fi
 if grep -q 'success=die' "$setup" || grep -q 'success=die' "$apply_lock"; then
   fail "lock fingerprint writers do not die on a closed lid"
 fi
-grep -q 'success=1' "$setup" || fail "sudo and polkit still skip fingerprint when the lid is closed"
+grep -q 'success=ignore default=1' "$setup" || fail "sudo and polkit still skip fingerprint when the lid is closed"
 if grep -q 'every stack' "$setup"; then
   fail "the clamshell-gate comment does not claim the lock stack"
 fi
