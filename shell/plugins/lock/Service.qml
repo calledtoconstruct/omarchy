@@ -23,7 +23,8 @@ Item {
   property bool fingerprintAuthenticating: false
   property bool passwordPamConfigured: false
   property bool fingerprintConfigured: false
-  property int fingerprintRetryMs: 0
+  property int fingerprintRetryAttempt: 0
+  property bool laptopClosed: false
   property bool previewVisible: false
   property string enteredPassword: ""
   property string pendingPassword: ""
@@ -52,6 +53,9 @@ Item {
   readonly property bool authenticating: authenticatingPassword || fingerprintAuthenticating
   readonly property var batteryService: shell && shell.services ? shell.firstPartyServiceFor("omarchy.battery") : null
   readonly property bool powerSaverActive: batteryService ? batteryService.powerSaverOnBattery : false
+  readonly property var lockConfig: shell && shell.shellConfig && shell.shellConfig.lock
+    ? shell.shellConfig.lock : ({})
+  readonly property string fingerprintLidClosed: FingerprintRetry.lidClosedPolicy(lockConfig.fingerprintLidClosed)
 
   function realScreenCount() {
     var screens = Quickshell.screens || []
@@ -133,6 +137,27 @@ Item {
     if (!fingerprintCheckProc.running) fingerprintCheckProc.running = true
   }
 
+  function refreshLidState() {
+    if (!laptopClosedProc.running) laptopClosedProc.running = true
+  }
+
+  function fingerprintBlockedByLid() {
+    return fingerprintLidClosed === "skip" && laptopClosed
+  }
+
+  function onLidStateRefreshed() {
+    if (!lockRequested || !fingerprintConfigured) return
+
+    if (fingerprintBlockedByLid()) {
+      fingerprintAuthenticating = false
+      fingerprintRetryTimer.stop()
+      if (fingerprintPam.active) fingerprintPam.abort()
+      return
+    }
+
+    if (!fingerprintPam.active && !fingerprintAuthenticating) startFingerprint()
+  }
+
   function logEvent(event) {
     lastEvent = event
     lastEventAt = new Date().toISOString()
@@ -146,7 +171,7 @@ Item {
     failedAttempts = 0
     authenticatingPassword = false
     fingerprintAuthenticating = false
-    fingerprintRetryMs = 0
+    fingerprintRetryAttempt = 0
     fingerprintRetryTimer.stop()
     if (passwordPam.active) passwordPam.abort()
     if (fingerprintPam.active) fingerprintPam.abort()
@@ -154,9 +179,14 @@ Item {
 
   function scheduleFingerprintRetry() {
     if (!lockRequested || !fingerprintConfigured) return
+    if (fingerprintBlockedByLid()) return
+    if (!FingerprintRetry.shouldRetry(fingerprintRetryAttempt)) {
+      logEvent("fingerprint-retry-exhausted")
+      return
+    }
 
-    fingerprintRetryMs = FingerprintRetry.nextInterval(fingerprintRetryMs)
-    fingerprintRetryTimer.interval = fingerprintRetryMs
+    fingerprintRetryTimer.interval = FingerprintRetry.delayForAttempt(fingerprintRetryAttempt)
+    fingerprintRetryAttempt += 1
     fingerprintRetryTimer.restart()
   }
 
@@ -175,6 +205,7 @@ Item {
     Qt.callLater(function() {
       root.refreshBackground()
       root.refreshFingerprintStatus()
+      root.refreshLidState()
     })
 
     return true
@@ -271,6 +302,7 @@ Item {
 
   function startFingerprint() {
     if (!lockRequested || !sessionLock.secure || !fingerprintConfigured) return
+    if (fingerprintBlockedByLid()) return
     if (fingerprintPam.active || fingerprintAuthenticating) return
 
     fingerprintAuthenticating = true
@@ -302,6 +334,8 @@ Item {
         root.pendingSessionLock = false
         sessionLockStabilizeTimer.stop()
         pendingSessionLockTimer.stop()
+        root.fingerprintRetryAttempt = 0
+        root.refreshLidState()
         root.startFingerprint()
       }
     }
@@ -450,9 +484,27 @@ Item {
 
   Timer {
     id: fingerprintRetryTimer
-    interval: 250
+    interval: FingerprintRetry.INITIAL_MS
     repeat: false
     onTriggered: root.startFingerprint()
+  }
+
+  Timer {
+    id: lidRefreshTimer
+    interval: 1000
+    repeat: true
+    running: root.lockRequested && root.fingerprintLidClosed === "skip"
+    onTriggered: root.refreshLidState()
+  }
+
+  Process {
+    id: laptopClosedProc
+    command: ["bash", "-c", "omarchy-hw-laptop-closed && echo closed || echo open"]
+    stdout: StdioCollector { id: laptopClosedOut; waitForEnd: true }
+    onExited: {
+      root.laptopClosed = String(laptopClosedOut.text || "").trim() === "closed"
+      root.onLidStateRefreshed()
+    }
   }
 
   Process {
