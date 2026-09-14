@@ -1,16 +1,30 @@
 var INITIAL_MS = 250
-var MAX_MS = 8000
+var CAP_MS = 30000
+var MAX_ATTEMPTS = 8
 
-function nextInterval(previous) {
-  var n = Number(previous)
-  if (!isFinite(n) || n < INITIAL_MS) return INITIAL_MS
-  return Math.min(n * 2, MAX_MS)
+function delayForAttempt(attempt) {
+  var n = Number(attempt)
+  if (!isFinite(n) || n < 0) n = 0
+  return Math.min(CAP_MS, INITIAL_MS * Math.pow(2, n))
+}
+
+function shouldRetry(attempt) {
+  var n = Number(attempt)
+  if (!isFinite(n) || n < 0) n = 0
+  return n < MAX_ATTEMPTS
+}
+
+function lidClosedPolicy(value) {
+  return value === "skip" ? "skip" : "try"
 }
 
 if (typeof module !== "undefined") {
   module.exports = {
     INITIAL_MS: INITIAL_MS,
-    MAX_MS: MAX_MS,
-    nextInterval: nextInterval
+    CAP_MS: CAP_MS,
+    MAX_ATTEMPTS: MAX_ATTEMPTS,
+    delayForAttempt: delayForAttempt,
+    shouldRetry: shouldRetry,
+    lidClosedPolicy: lidClosedPolicy
   }
 }
