@@ -24,7 +24,9 @@ Item {
   property bool passwordPamConfigured: false
   property bool fingerprintConfigured: false
   property int fingerprintRetryAttempt: 0
+  property string fingerprintLastMessage: ""
   property bool laptopClosed: false
+  property bool laptopClosedKnown: false
   property bool previewVisible: false
   property string enteredPassword: ""
   property string pendingPassword: ""
@@ -131,7 +133,11 @@ Item {
     return fingerprintLidClosed === "skip" && laptopClosed
   }
 
-  function onLidStateRefreshed() {
+  function applyLidClosed(closed) {
+    var wasClosed = laptopClosedKnown && laptopClosed
+    laptopClosed = closed
+    laptopClosedKnown = true
+
     if (!lockRequested || !fingerprintConfigured) return
 
     if (fingerprintBlockedByLid()) {
@@ -141,7 +147,7 @@ Item {
       return
     }
 
-    if (!fingerprintPam.active && !fingerprintAuthenticating) startFingerprint()
+    if (wasClosed && !closed) startFingerprint()
   }
 
   function logEvent(event) {
@@ -158,21 +164,21 @@ Item {
     authenticatingPassword = false
     fingerprintAuthenticating = false
     fingerprintRetryAttempt = 0
+    fingerprintLastMessage = ""
     fingerprintRetryTimer.stop()
     if (passwordPam.active) passwordPam.abort()
     if (fingerprintPam.active) fingerprintPam.abort()
   }
 
-  function scheduleFingerprintRetry() {
+  function scheduleFingerprintRetry(idleTimeout) {
     if (!lockRequested || !fingerprintConfigured) return
     if (fingerprintBlockedByLid()) return
-    if (!FingerprintRetry.shouldRetry(fingerprintRetryAttempt)) {
-      logEvent("fingerprint-retry-exhausted")
-      return
-    }
 
-    fingerprintRetryTimer.interval = FingerprintRetry.delayForAttempt(fingerprintRetryAttempt)
-    fingerprintRetryAttempt += 1
+    var consume = !idleTimeout
+    fingerprintRetryTimer.interval = consume
+      ? FingerprintRetry.delayForAttempt(fingerprintRetryAttempt)
+      : FingerprintRetry.INITIAL_MS
+    if (consume) fingerprintRetryAttempt += 1
     fingerprintRetryTimer.restart()
   }
 
@@ -304,9 +310,12 @@ Item {
     if (!lockRequested) return
     if (result === PamResult.Success) {
       finishUnlock()
-    } else {
-      scheduleFingerprintRetry()
+      return
     }
+
+    scheduleFingerprintRetry(
+      result === PamResult.Failed && FingerprintRetry.isIdleTimeout(fingerprintLastMessage)
+    )
   }
 
   WlSessionLock {
@@ -434,9 +443,17 @@ Item {
       root.handleFingerprintFinished(result)
     }
 
+    // Quickshell's PamContext.onError always emits completed(Error) next.
+    // Scheduling here would consume two backoff slots per failed conversation.
     onError: function(error) {
       root.fingerprintAuthenticating = false
-      root.scheduleFingerprintRetry()
+    }
+
+    onPamMessage: {
+      root.fingerprintLastMessage = String(fingerprintPam.message || "")
+      if (!fingerprintPam.messageIsError && fingerprintPam.message) {
+        root.fingerprintRetryAttempt = 0
+      }
     }
   }
 
@@ -460,8 +477,7 @@ Item {
     command: ["bash", "-c", "omarchy-hw-laptop-closed && echo closed || echo open"]
     stdout: StdioCollector { id: laptopClosedOut; waitForEnd: true }
     onExited: {
-      root.laptopClosed = String(laptopClosedOut.text || "").trim() === "closed"
-      root.onLidStateRefreshed()
+      root.applyLidClosed(String(laptopClosedOut.text || "").trim() === "closed")
     }
   }
 
