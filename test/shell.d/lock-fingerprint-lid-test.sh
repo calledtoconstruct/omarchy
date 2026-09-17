@@ -38,12 +38,16 @@ assert(
   'startFingerprint does not arm PAM when skip mode sees a closed lid'
 )
 assert(
-  /function scheduleFingerprintRetry\(\)[\s\S]*fingerprintBlockedByLid\(\)/.test(serviceQml),
+  /function scheduleFingerprintRetry\([\s\S]*fingerprintBlockedByLid\(\)/.test(serviceQml),
   'lid-closed skip does not consume the fingerprint retry budget'
 )
 assert(
   /fingerprintPam\.abort\(\)/.test(serviceQml.replace(/function resetAuthenticationState\(\)[\s\S]*?\n  \}/, '')) &&
     /laptopClosed/.test(serviceQml),
   'skip mode aborts an in-flight fingerprint PAM session when the lid shuts'
+)
+assert(
+  /function applyLidClosed[\s\S]*wasClosed && !closed/.test(serviceQml),
+  'the lid poll starts fingerprint only on a closed-to-open transition'
 )
 JS
