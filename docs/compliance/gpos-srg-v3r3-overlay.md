@@ -1,0 +1,43 @@
+# GPOS SRG V3R3 overlay
+
+This directory is an overlay onto DISA GPOS SRG V3R3 (General Purpose OS SRG, 2025-09-22).
+It is not a DISA STIG, not an Arch Linux STIG, and not an authorization to operate.
+This packet is not an official STIG.
+Submit it as vendor-produced evidence with an Omarchy stable image and the restricted package stream.
+
+Rows use GPOS V-IDs only. Status is `implemented`, `partial`, `gap`, or `not-applicable`.
+
+## Catalog
+
+| vuln_id | severity | title | status | omarchy_mechanism | evidence | gap | srg_id |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| V-203603 | CAT I | DoD-approved encryption for remote access sessions | partial | openssh with sshd off until Setup Security SSHD | default firewall blocks inbound ssh | DoD cipher suite is not mandated | SRG-OS-000033-GPOS-00014 |
+| V-203629 | CAT I | store only encrypted representations of passwords | implemented | shadow yescrypt via pam_unix | default Arch shadow hashing |  | SRG-OS-000073-GPOS-00041 |
+| V-203630 | CAT I | transmit only encrypted representations of passwords | partial | sshd and PAM avoid cleartext password transport | sshd disabled until explicitly enabled | no dedicated remote-auth cipher policy | SRG-OS-000074-GPOS-00042 |
+| V-203653 | CAT I | strong authenticators for nonlocal maintenance sessions | gap | optional sshd and optional FIDO2 | sshd off by default | MFA is not required for remote maintenance | SRG-OS-000125-GPOS-00065 |
+| V-203669 | CAT I | cryptography to protect integrity of remote access sessions | partial | openssh transport integrity when sshd is enabled | sshd off until opted in | DoD-approved algorithms are not pinned | SRG-OS-000250-GPOS-00093 |
+| V-203682 | CAT I | cryptographic protection of audit tools | gap | no STIG-complete auditd ruleset | journald default logging | audit tool integrity is not measured | SRG-OS-000278-GPOS-00108 |
+| V-203695 | CAT I | prevent nonprivileged users from executing privileged functions | gap | sudo prompts by default | omarchy-sudo-passwordless exists on default | regulated profile is the intended close | SRG-OS-000324-GPOS-00125 |
+| V-203720 | CAT I | verify digitally signed patches before installation | partial | OPR and Arch packages are signed | pacman SigLevel and omarchy-keyring | AUR is unsigned; restricted stream is the intended close | SRG-OS-000366-GPOS-00153 |
+| V-203736 | CAT I | crypto protecting integrity of nonlocal maintenance communications | partial | openssh when sshd is enabled | sshd off until opted in | no separate maintenance-channel policy | SRG-OS-000393-GPOS-00173 |
+| V-203737 | CAT I | crypto protecting confidentiality of nonlocal maintenance communications | partial | openssh when sshd is enabled | sshd off until opted in | no separate maintenance-channel policy | SRG-OS-000394-GPOS-00174 |
+| V-203739 | CAT I | NSA-approved cryptography to protect classified information | gap | no NSA-approved crypto module story | stock Arch/OpenSSL | FIPS/NSA kernel path is out of this slice | SRG-OS-000396-GPOS-00176 |
+| V-203745 | CAT I | crypto to prevent unauthorized modification of information at rest | implemented | mandatory LUKS full-disk encryption | ISO installer requires LUKS |  | SRG-OS-000404-GPOS-00183 |
+| V-203746 | CAT I | crypto to prevent unauthorized disclosure of information at rest | implemented | mandatory LUKS full-disk encryption | ISO installer requires LUKS |  | SRG-OS-000405-GPOS-00184 |
+| V-203748 | CAT I | protect confidentiality and integrity of transmitted information | partial | TLS for package mirrors and sshd when enabled | Cloudflare-fronted mirrors | no host-wide transmit-encryption policy | SRG-OS-000423-GPOS-00187 |
+| V-203749 | CAT I | crypto during transmission unless protected by PDS | partial | TLS and OpenSSH for network paths | sshd and HTTPS mirrors | PDS and DoD cipher pinning are absent | SRG-OS-000424-GPOS-00188 |
+| V-203776 | CAT I | NIST FIPS-validated cryptography for signatures hashes and confidentiality | gap | no FIPS kernel or validated module story | stock Arch crypto | FIPS is out of this slice | SRG-OS-000478-GPOS-00223 |
+| V-203782 | CAT I | must not allow unattended or automatic logon | gap | ISO/SDDM autologin on default encrypted installs | ISO owns autologin session state | default autologin remains | SRG-OS-000480-GPOS-00229 |
+| V-252688 | CAT I | protect confidentiality and integrity of communications with wireless peripherals | gap | bluetooth is available in the desktop | no enforced wireless-peripheral crypto policy | BT pairing is not GPOS-hardened | SRG-OS-000481-GPOS-00481 |
+| V-259333 | CAT I | install security-relevant software updates within 30 days | partial | omarchy-update on rolling Arch plus OPR | update path exists | sidecar plus arch-audit evidence is the close | SRG-OS-000439-GPOS-00195 |
+| V-278977 | CAT I | operating system must be a version supported by the vendor | partial | Omarchy stable channel is the supported train | edge and rc are pre-release | honest only on stable | SRG-OS-000830-GPOS-00300 |
+| V-203599 | CAT II | session lock after 15 minutes | partial | idle.lock in shell.json | default 300 seconds | regulated profile sets 900 | SRG-OS-000029-GPOS-00010 |
+
+## How to use
+
+Hand this packet to an AO with an Omarchy **stable** image. It is vendor-produced overlay evidence for GPOS SRG V3R3; it is not an authorization to operate.
+
+Related work on sibling branches:
+
+- `omarchy-profile-regulated` (corporate stream) sets `idle.lock` to 900 and refuses `omarchy-sudo-passwordless`.
+- `bin/sync-restricted` (restricted package stream) copies signed allowlisted packages from stable; it is not a fourth edge→rc→stable stage.
