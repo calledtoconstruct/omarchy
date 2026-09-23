@@ -1,0 +1,62 @@
+#!/bin/bash
+# omarchy:summary=Opt in to the corporate regulated profile (15-minute lock, no passwordless sudo).
+# omarchy:args=<apply|status|disable>
+
+set -euo pipefail
+
+cfg="${OMARCHY_CONFIG_HOME:-$HOME/.config/omarchy}"
+marker="$cfg/profile"
+prev="$cfg/profile.regulated.prev.json"
+shell="$cfg/shell.json"
+
+usage() { echo "Usage: omarchy-profile-regulated <apply|status|disable>"; }
+
+ensure_shell() {
+  mkdir -p "$cfg"
+  if [[ ! -f $shell ]]; then
+    printf '%s\n' '{"version":1,"idle":{"lock":300}}' >"$shell"
+  fi
+}
+
+case ${1:-} in
+status)
+  if [[ -f $marker && $(<"$marker") == regulated ]]; then
+    profile_name=regulated
+  else
+    profile_name=default
+  fi
+  lock=""
+  if [[ -f $shell ]]; then
+    lock=$(jq -r '.idle.lock // empty' "$shell")
+  fi
+  if [[ -n $lock ]]; then
+    printf '%s\nidle.lock=%s\n' "$profile_name" "$lock"
+  else
+    printf '%s\n' "$profile_name"
+  fi
+  ;;
+apply)
+  ensure_shell
+  mkdir -p "$cfg"
+  jq '{idle:{lock:(.idle.lock // 300)}}' "$shell" >"$prev"
+  tmp=$(mktemp)
+  jq '.idle.lock = 900' "$shell" >"$tmp"
+  mv "$tmp" "$shell"
+  printf 'regulated\n' >"$marker"
+  echo "Regulated profile on. idle.lock=900. Passwordless sudo is refused until you disable this."
+  ;;
+disable)
+  if [[ -f $prev && -f $shell ]]; then
+    old=$(jq -r '.idle.lock' "$prev")
+    tmp=$(mktemp)
+    jq --argjson lock "$old" '.idle.lock = $lock' "$shell" >"$tmp"
+    mv "$tmp" "$shell"
+  fi
+  rm -f "$marker" "$prev"
+  echo "Regulated profile off."
+  ;;
+*)
+  usage >&2
+  exit 1
+  ;;
+esac
