@@ -37,6 +37,8 @@ Rows use GPOS V-IDs only. Status is `implemented`, `partial`, `gap`, or `not-app
 
 Hand this packet to an AO with an Omarchy **stable** image. It is vendor-produced overlay evidence for GPOS SRG V3R3; it is not an authorization to operate.
 
+CAT I Check/Fix against NixOS, Ubuntu 24.04, and RHEL 9 is in `gpos-cati-product-map.md`.
+
 Related work on sibling branches:
 
 - `omarchy-profile-regulated` (corporate stream) sets `idle.lock` to 900 and refuses `omarchy-sudo-passwordless`.
