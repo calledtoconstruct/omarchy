@@ -1,0 +1,152 @@
+#!/bin/bash
+# omarchy:summary=Report OPR and arch-audit CVE exposure (fail-closed when regulated).
+# omarchy:args=[--sidecar PATH] [--installed-file PATH] [--arch-audit-file PATH] [--json] [--fail-closed]
+
+set -euo pipefail
+
+SIDECAR=""
+INSTALLED_FILE=""
+ARCH_AUDIT_FILE=""
+JSON=0
+FAIL_CLOSED=0
+
+usage() {
+  echo "Usage: omarchy-risk-report [--sidecar PATH] [--installed-file PATH] [--arch-audit-file PATH] [--json] [--fail-closed]"
+}
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --sidecar)
+    SIDECAR=$2
+    shift 2
+    ;;
+  --installed-file)
+    INSTALLED_FILE=$2
+    shift 2
+    ;;
+  --arch-audit-file)
+    ARCH_AUDIT_FILE=$2
+    shift 2
+    ;;
+  --json)
+    JSON=1
+    shift
+    ;;
+  --fail-closed)
+    FAIL_CLOSED=1
+    shift
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "Unknown option: $1" >&2
+    usage >&2
+    exit 1
+    ;;
+  esac
+done
+
+cfg="${OMARCHY_CONFIG_HOME:-$HOME/.config/omarchy}"
+marker="$cfg/profile"
+profile=default
+if [[ -f $marker && $(<"$marker") == regulated ]]; then
+  profile=regulated
+  FAIL_CLOSED=1
+fi
+
+if [[ -z $SIDECAR ]]; then
+  for candidate in \
+    /var/lib/pacman/sync/omarchy.advisories.json \
+    /usr/share/omarchy/advisories/omarchy.advisories.json; do
+    if [[ -f $candidate ]]; then
+      SIDECAR=$candidate
+      break
+    fi
+  done
+fi
+
+sidecar_missing=0
+if [[ -z $SIDECAR || ! -f $SIDECAR ]]; then
+  sidecar_missing=1
+fi
+
+load_installed() {
+  if [[ -n $INSTALLED_FILE ]]; then
+    cat "$INSTALLED_FILE"
+    return
+  fi
+}
+
+opr_json='[]'
+arch_json='[]'
+closed_hit=0
+if (( sidecar_missing == 1 )); then
+  closed_hit=1
+fi
+
+if (( sidecar_missing == 0 )); then
+  while read -r name ver arch; do
+    [[ -z ${name:-} ]] && continue
+    key="${name}:${ver}:${arch}"
+    row=$(jq -c --arg k "$key" '.advisories[$k] // null' "$SIDECAR")
+    if [[ $row == null ]]; then
+      row=$(jq -nc --arg pkg "$name" --arg ver "$ver" --arg arch "$arch" \
+        '{pkgname:$pkg, pkgver:$ver, arch:$arch, scan_status:"absent", cve_ids:[], cve_max_severity:"NONE"}')
+      closed_hit=1
+    else
+      status=$(jq -r '.scan_status // "ok"' <<<"$row")
+      sev=$(jq -r '.cve_max_severity // "NONE"' <<<"$row")
+      sev_u=${sev^^}
+      if [[ $status == error || $sev_u == HIGH || $sev_u == CRITICAL ]]; then
+        closed_hit=1
+      fi
+    fi
+    opr_json=$(jq -c --argjson row "$row" '. + [$row]' <<<"$opr_json")
+  done < <(load_installed)
+fi
+
+if [[ -n $ARCH_AUDIT_FILE && -f $ARCH_AUDIT_FILE ]]; then
+  arch_json=$(jq -c '.' "$ARCH_AUDIT_FILE")
+  if jq -e '.[] | select((.severity // "" | ascii_upcase) == "HIGH" or (.severity // "" | ascii_upcase) == "CRITICAL")' <<<"$arch_json" >/dev/null; then
+    closed_hit=1
+  fi
+fi
+
+closed=false
+if (( FAIL_CLOSED == 1 )); then
+  closed=true
+fi
+
+report=$(jq -nc --arg profile "$profile" --argjson opr "$opr_json" --argjson arch "$arch_json" --argjson closed "$closed" \
+  '{profile:$profile, opr:$opr, arch:$arch, closed:$closed}')
+
+if (( JSON == 1 )); then
+  printf '%s\n' "$report"
+else
+  echo "profile=$profile closed=$closed"
+  if (( sidecar_missing == 1 )); then
+    echo "advisory sidecar not found"
+  fi
+  jq -r '
+    .opr[]
+    | select((.cve_max_severity // "NONE" | ascii_upcase) == "HIGH" or (.cve_max_severity // "NONE" | ascii_upcase) == "CRITICAL")
+    | "OPR HIGH: \(.pkgname) \((.cve_ids // []) | join(" ")) severity=\(.cve_max_severity)"
+  ' <<<"$report"
+  jq -r '
+    .opr[]
+    | select(.scan_status == "error")
+    | "OPR error: \(.pkgname) scan_status=error"
+  ' <<<"$report"
+  jq -r '
+    .arch[]
+    | select((.severity // "" | ascii_upcase) == "HIGH" or (.severity // "" | ascii_upcase) == "CRITICAL")
+    | "arch-audit HIGH: \(.name) \(.cve) severity=\(.severity)"
+  ' <<<"$report"
+fi
+
+if (( FAIL_CLOSED == 1 && closed_hit == 1 )); then
+  exit 2
+fi
+exit 0
