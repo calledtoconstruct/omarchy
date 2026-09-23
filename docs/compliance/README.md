@@ -11,3 +11,5 @@ Files:
 
 - `gpos-srg-v3r3-overlay.md` — cover letter and catalog
 - `gpos-srg-v3r3-overlay.csv` — machine-readable rows for the same GPOS V-IDs
+- `gpos-cati-product-map.md` — CAT I Check/Fix map against NixOS, Ubuntu 24.04, and RHEL 9
+- `gpos-cati-product-map.csv` — the same map as IDs only
