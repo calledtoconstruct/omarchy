@@ -1,0 +1,115 @@
+#!/bin/bash
+# omarchy:summary=Show known CVEs for installed OPR packages from the advisory sidecar.
+# omarchy:args=[--sidecar PATH] [--installed-file PATH] [--json] [--fail-closed]
+
+set -euo pipefail
+
+SIDECAR=""
+INSTALLED_FILE=""
+JSON=0
+FAIL_CLOSED=0
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --sidecar)
+    SIDECAR=$2
+    shift 2
+    ;;
+  --installed-file)
+    INSTALLED_FILE=$2
+    shift 2
+    ;;
+  --json)
+    JSON=1
+    shift
+    ;;
+  --fail-closed)
+    FAIL_CLOSED=1
+    shift
+    ;;
+  -h|--help)
+    echo "Usage: omarchy-pkg-advisories [--sidecar PATH] [--installed-file PATH] [--json] [--fail-closed]"
+    exit 0
+    ;;
+  *)
+    echo "Unknown option: $1" >&2
+    exit 1
+    ;;
+  esac
+done
+
+if [[ -z $SIDECAR ]]; then
+  for candidate in \
+    /var/lib/pacman/sync/omarchy.advisories.json \
+    /usr/share/omarchy/advisories/omarchy.advisories.json; do
+    if [[ -f $candidate ]]; then
+      SIDECAR=$candidate
+      break
+    fi
+  done
+fi
+
+if [[ -z $SIDECAR || ! -f $SIDECAR ]]; then
+  echo "advisory sidecar not found; skipping CVE warnings (fail-open)" >&2
+  echo "advisory sidecar not found; skipping CVE warnings (fail-open)"
+  if (( FAIL_CLOSED )); then
+    exit 2
+  else
+    exit 0
+  fi
+fi
+
+# Read installed list. Each line: name version arch
+# version is pkgver-pkgrel.
+load_installed() {
+  if [[ -n $INSTALLED_FILE ]]; then
+    cat "$INSTALLED_FILE"
+    return
+  fi
+  pacman -Q --info 2>/dev/null | awk '
+    $1=="Name" && $2==":" {name=$3}
+    $1=="Version" && $2==":" {ver=$3}
+    $1=="Architecture" && $2==":" {print name, ver, $3}
+  '
+}
+
+findings_json=$(mktemp)
+echo '[]' >"$findings_json"
+trap 'rm -f "$findings_json"' EXIT
+
+closed_hit=0
+while read -r name ver arch; do
+  [[ -z ${name:-} ]] && continue
+  key="${name}:${ver}:${arch}"
+  row=$(jq -c --arg k "$key" '.advisories[$k] // null' "$SIDECAR")
+  if [[ $row == null ]]; then
+    closed_hit=1
+    if (( !JSON )); then
+      echo "warning: no OPR advisory row for $key"
+    fi
+    jq --arg pkg "$name" --arg ver "$ver" --arg arch "$arch" \
+      '. + [{pkgname:$pkg, pkgver:$ver, arch:$arch, scan_status:"absent", cve_ids:[], cve_max_severity:"NONE"}]' \
+      "$findings_json" >"$findings_json.new" && mv "$findings_json.new" "$findings_json"
+    continue
+  fi
+  status=$(jq -r '.scan_status' <<<"$row")
+  sev=$(jq -r '.cve_max_severity // "NONE"' <<<"$row")
+  cves=$(jq -r '.cve_ids // [] | join(" ")' <<<"$row")
+  if [[ $status == "error" || $sev == "HIGH" || $sev == "CRITICAL" ]]; then
+    closed_hit=1
+  fi
+  if (( !JSON )); then
+    echo "$name $ver $arch status=$status severity=$sev cves=${cves:-none}"
+  fi
+  jq --argjson row "$row" '. + [$row]' "$findings_json" >"$findings_json.new" && mv "$findings_json.new" "$findings_json"
+done < <(load_installed)
+
+if (( JSON )); then
+  cat "$findings_json"
+fi
+
+if (( FAIL_CLOSED && closed_hit )); then
+  exit 2
+else
+  exit 0
+fi
