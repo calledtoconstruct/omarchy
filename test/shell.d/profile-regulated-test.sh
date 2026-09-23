@@ -29,4 +29,13 @@ EOF
 [[ ! -e $OMARCHY_CONFIG_HOME/profile ]] || fail "disable removes marker"
 [[ $(jq -r '.idle.lock' "$OMARCHY_CONFIG_HOME/shell.json") == 300 ]] || fail "disable restores lock 300"
 
+"$cmd" apply
+export PATH="/usr/bin:/bin"
+set +e
+err=$("$ROOT/bin/omarchy-sudo-passwordless" 2>&1)
+rc=$?
+set -e
+[[ $rc -eq 1 ]] || fail "passwordless sudo refused under regulated" "exit $rc"
+grep -qi 'regulated' <<<"$err" || fail "refusal names the regulated profile"
+
 pass "regulated profile apply status disable"
