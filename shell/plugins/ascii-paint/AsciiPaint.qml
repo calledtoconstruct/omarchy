@@ -464,7 +464,7 @@ Item {
     root.writing = true
     mkdirProc.command = [
       "bash", "-c",
-      "mkdir -p \"$(dirname -- \"$1\")\"; if [[ -f $1 ]]; then cp -f \"$1\" \"$2\"; fi",
+      "mkdir -p \"$(dirname -- \"$1\")\"; if [[ -f $1 ]]; then cp -f \"$1\" \"$2\"; fi; touch \"$1\"",
       "omarchy-ascii-paint-save",
       path,
       PaintModel.backupPath(path)
