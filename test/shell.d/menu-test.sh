@@ -345,6 +345,7 @@ assertDeepEqual(
     .map(item => item.id),
   [
     'remove.package',
+    'remove.bundle',
     'remove.ai',
     'remove.dictation',
     'remove.service',
