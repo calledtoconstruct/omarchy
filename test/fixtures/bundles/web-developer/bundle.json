@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "packageType": "bundle",
+  "id": "web-developer",
+  "name": "Web Developer",
+  "version": "1.0.0",
+  "description": "A local web project setup. Packages are the ones omarchy-install-dev-env installs with pacman.",
+  "packages": ["libyaml", "symfony-cli", "rlwrap"],
+  "plugins": [],
+  "skills": ["skills/web-setup"],
+  "config": [
+    {
+      "source": "config/editorconfig",
+      "target": "~/.config/omarchy-bundles/web-developer/editorconfig"
+    }
+  ],
+  "conflicts": [],
+  "project": {
+    "layout": ["src", "public"],
+    "create": "project/create.sh"
+  }
+}
