@@ -1666,17 +1666,6 @@ Item {
       pressedY = mouse.y
     }
 
-    onPressedChanged: {
-      // pressedChanged fires before released. Defer so a real release can still
-      // finish the move; a dropped grab still has dragging set when this runs.
-      if (pressed || !dragging) return
-      Qt.callLater(function() {
-        if (!gestureArea.dragging || gestureArea.pressed) return
-        gestureArea.dragging = false
-        root.clearBarMove()
-      })
-    }
-
     onPressAndHold: function(mouse) {
       // A widget above us propagates its composed press-and-hold down here without
       // ever handing over the grab, so we'd get no release or cancel to end the move.
