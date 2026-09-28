@@ -1,0 +1,316 @@
+#!/bin/bash
+
+set -euo pipefail
+
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
+
+require_command jq
+
+HOME_DIR=$(mktemp -d)
+trap 'rm -rf "$HOME_DIR"' EXIT
+
+stub_dir="$HOME_DIR/stub"
+mkdir -p "$stub_dir"
+
+cat >"$stub_dir/pacman" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >>"${HOME}/pacman-calls.log"
+if [[ $1 == -Qqe ]]; then
+  [[ -f $HOME/explicit.list ]] && cat "$HOME/explicit.list"
+  exit 0
+fi
+if [[ $1 == -Q ]]; then
+  pkg="${!#}"
+  [[ -f $HOME/installed.list ]] && grep -qxF -- "$pkg" "$HOME/installed.list"
+  exit $?
+fi
+exit 0
+EOF
+
+cat >"$stub_dir/omarchy-pkg-add" <<'EOF'
+#!/bin/bash
+printf 'omarchy-pkg-add %s\n' "$*" >>"$HOME/calls.log"
+touch "$HOME/installed.list" "$HOME/explicit.list"
+for pkg in "$@"; do
+  printf '%s\n' "$pkg" >>"$HOME/installed.list"
+  printf '%s\n' "$pkg" >>"$HOME/explicit.list"
+done
+exit 0
+EOF
+
+cat >"$stub_dir/omarchy-pkg-drop" <<'EOF'
+#!/bin/bash
+printf 'omarchy-pkg-drop %s\n' "$*" >>"$HOME/calls.log"
+touch "$HOME/installed.list" "$HOME/explicit.list"
+for pkg in "$@"; do
+  grep -vxF -- "$pkg" "$HOME/installed.list" >"$HOME/installed.list.next" || true
+  mv -f "$HOME/installed.list.next" "$HOME/installed.list"
+  grep -vxF -- "$pkg" "$HOME/explicit.list" >"$HOME/explicit.list.next" || true
+  mv -f "$HOME/explicit.list.next" "$HOME/explicit.list"
+done
+exit 0
+EOF
+
+for plugin_cmd in omarchy-plugin-add omarchy-plugin-remove omarchy-plugin-validate omarchy-plugin-list; do
+  cat >"$stub_dir/$plugin_cmd" <<EOF
+#!/bin/bash
+printf '%s %s\\n' "$plugin_cmd" "\$*" >>"\$HOME/calls.log"
+exit 1
+EOF
+done
+
+chmod +x "$stub_dir"/*
+
+new_home() {
+  local name="$1"
+  local home="$HOME_DIR/homes/$name"
+  rm -rf "$home"
+  mkdir -p "$home/.local/share" "$home/.local/state" "$home/.config" "$home/.agents/skills"
+  printf '%s\n' "$home"
+}
+
+run_bundle() {
+  local home="$1"
+  shift
+  HOME="$home" \
+    XDG_DATA_HOME="$home/.local/share" \
+    XDG_STATE_HOME="$home/.local/state" \
+    XDG_CONFIG_HOME="$home/.config" \
+    PATH="$stub_dir:$ROOT/bin:$PATH" \
+    "$@"
+}
+
+write_bundle() {
+  local dir="$1" id="$2" name="$3" packages="$4" conflicts="${5:-[]}"
+  mkdir -p "$dir"
+  jq -n \
+    --arg id "$id" --arg name "$name" \
+    --argjson packages "$packages" --argjson conflicts "$conflicts" \
+    '{
+      schemaVersion: 1,
+      packageType: "bundle",
+      id: $id,
+      name: $name,
+      version: "1.0.0",
+      description: $name,
+      packages: $packages,
+      plugins: [],
+      skills: [],
+      config: [],
+      conflicts: $conflicts
+    }' >"$dir/bundle.json"
+}
+
+calls_have() {
+  local home="$1" expected="$2"
+  [[ -f $home/calls.log ]] && grep -qxF -- "$expected" "$home/calls.log"
+}
+
+# 1. Shared package stays until both bundles are gone.
+home=$(new_home shared)
+write_bundle "$home/a" shared-a "Shared A" '["sharedpkg","only-a"]'
+write_bundle "$home/b" shared-b "Shared B" '["sharedpkg","only-b"]'
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/a" >/dev/null
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/b" >/dev/null
+calls_have "$home" "omarchy-pkg-add sharedpkg only-a" || fail "first bundle installs its packages" "$(cat "$home/calls.log")"
+calls_have "$home" "omarchy-pkg-add only-b" || fail "second bundle installs only the missing package" "$(cat "$home/calls.log")"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-remove" --yes shared-a >/dev/null
+calls_have "$home" "omarchy-pkg-drop only-a" || fail "removing one owner drops only its private package" "$(cat "$home/calls.log")"
+grep -qxF sharedpkg "$home/installed.list" || fail "shared package remains installed" "$(cat "$home/installed.list")"
+if grep -q 'omarchy-pkg-drop sharedpkg' "$home/calls.log"; then
+  fail "shared package was dropped while another bundle still owns it" "$(cat "$home/calls.log")"
+fi
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-remove" --yes shared-b >/dev/null
+calls_have "$home" "omarchy-pkg-drop sharedpkg only-b" || calls_have "$home" "omarchy-pkg-drop only-b sharedpkg" \
+  || fail "removing the last owner drops the shared package" "$(cat "$home/calls.log")"
+if grep -qxF sharedpkg "$home/installed.list"; then
+  fail "shared package is still installed after both bundles are removed" "$(cat "$home/installed.list")"
+fi
+pass "shared package stays until both bundles are removed"
+
+# 2. A package you installed yourself is never removed. A file that already
+# existed is kept too.
+home=$(new_home yours)
+printf '%s\n' mine >"$home/installed.list"
+printf '%s\n' mine >"$home/explicit.list"
+mkdir -p "$home/.config"
+printf 'yours\n' >"$home/.config/preexisting.txt"
+write_bundle "$home/mine-bundle" mine-bundle "Mine" '["mine","fresh"]'
+jq '.config = [{"source":"config/note.txt","target":"~/.config/preexisting.txt"}]' \
+  "$home/mine-bundle/bundle.json" >"$home/mine-bundle/bundle.json.next"
+mv "$home/mine-bundle/bundle.json.next" "$home/mine-bundle/bundle.json"
+mkdir -p "$home/mine-bundle/config"
+printf 'bundle\n' >"$home/mine-bundle/config/note.txt"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/mine-bundle" >/dev/null
+[[ $(<"$home/.config/preexisting.txt") == yours ]] || fail "an existing config file is not overwritten"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-remove" --yes mine-bundle >/dev/null
+grep -qxF mine "$home/installed.list" || fail "a package installed before any bundle is kept" "$(cat "$home/installed.list" 2>/dev/null)"
+if grep -q 'omarchy-pkg-drop mine' "$home/calls.log"; then
+  fail "a preinstalled package was passed to omarchy-pkg-drop" "$(cat "$home/calls.log")"
+fi
+calls_have "$home" "omarchy-pkg-drop fresh" || fail "the bundle's own package is removed" "$(cat "$home/calls.log")"
+[[ $(<"$home/.config/preexisting.txt") == yours ]] || fail "a pre-existing config file is kept"
+pass "preinstalled packages and existing files are kept"
+
+# 3. Conflicts.
+home=$(new_home conflicts)
+write_bundle "$home/left" left-bundle "Left" '["leftpkg"]' '["right-bundle"]'
+write_bundle "$home/right" right-bundle "Right" '["rightpkg"]'
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/left" >/dev/null
+if run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/right" >"$home/conflict.out" 2>&1; then
+  fail "a conflicting bundle was installed" "$(cat "$home/conflict.out")"
+fi
+grep -q conflicts "$home/conflict.out" || fail "conflict refusal names the conflict" "$(cat "$home/conflict.out")"
+if [[ -f $home/calls.log ]] && grep -q rightpkg "$home/calls.log"; then
+  fail "a refused bundle installed a package" "$(cat "$home/calls.log")"
+fi
+pass "conflicting bundles are refused"
+
+# 4. Dry run.
+home=$(new_home dry)
+write_bundle "$home/dry-bundle" dry-bundle "Dry" '["drypkg"]'
+output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --dry-run "$home/dry-bundle")
+grep -q 'Dry run: nothing was installed.' <<<"$output" || fail "dry run says nothing was installed" "$output"
+grep -q drypkg <<<"$output" || fail "dry run names the package" "$output"
+[[ ! -e $home/.local/state/omarchy/bundles/ledger.json ]] || fail "dry run wrote a ledger"
+[[ ! -e $home/.local/share/omarchy/bundles ]] || fail "dry run copied the bundle"
+[[ ! -e $home/calls.log ]] || fail "dry run called a package or plugin command" "$(cat "$home/calls.log")"
+pass "dry run changes nothing"
+
+# 5. Validate.
+output=$(run_bundle "$HOME_DIR" "$ROOT/bin/omarchy-bundle-validate" "$ROOT/test/fixtures/bundles/web-developer")
+grep -q 'Valid bundle: web-developer 1.0.0' <<<"$output" || fail "web-developer example validates" "$output"
+output=$(run_bundle "$HOME_DIR" "$ROOT/bin/omarchy-bundle-validate" "$ROOT/test/fixtures/bundles/gamer")
+grep -q 'Valid bundle: gamer 1.0.0' <<<"$output" || fail "gamer example validates" "$output"
+
+bad="$HOME_DIR/bad"
+mkdir -p "$bad"
+jq 'del(.id)' "$ROOT/test/fixtures/bundles/gamer/bundle.json" >"$bad/bundle.json"
+if output=$(run_bundle "$HOME_DIR" "$ROOT/bin/omarchy-bundle-validate" "$bad" 2>&1); then
+  fail "validate accepted a bundle with no id" "$output"
+fi
+grep -q "missing required field 'id'" <<<"$output" || fail "validate names a missing id" "$output"
+
+jq 'del(.version)' "$ROOT/test/fixtures/bundles/gamer/bundle.json" >"$bad/bundle.json"
+if output=$(run_bundle "$HOME_DIR" "$ROOT/bin/omarchy-bundle-validate" "$bad" 2>&1); then
+  fail "validate accepted a bundle with no version" "$output"
+fi
+grep -q "missing required field 'version'" <<<"$output" || fail "validate names a missing version" "$output"
+
+jq '.hooks = []' "$ROOT/test/fixtures/bundles/gamer/bundle.json" >"$bad/bundle.json"
+if output=$(run_bundle "$HOME_DIR" "$ROOT/bin/omarchy-bundle-validate" "$bad" 2>&1); then
+  fail "validate accepted an unknown key" "$output"
+fi
+grep -q "unknown key 'hooks'" <<<"$output" || fail "validate names the unknown key" "$output"
+pass "validate rejects a missing id, a missing version, and unknown keys"
+
+# 6 and 7 and 9. Project creation, no execution during install, receipt fields.
+home=$(new_home project)
+bundle="$home/proj-bundle"
+mkdir -p "$bundle/project" "$bundle/skills/demo" "$bundle/config"
+cat >"$bundle/project/create.sh" <<'EOF'
+#!/bin/bash
+printf 'ran\n' >"$PROJECT_DIR/ran"
+printf 'readme\n' >"$PROJECT_DIR/README.md"
+EOF
+chmod +x "$bundle/project/create.sh"
+printf '# demo\n' >"$bundle/skills/demo/SKILL.md"
+printf 'from-bundle\n' >"$bundle/config/sample.txt"
+jq -n \
+  --arg home "$home" \
+  '{
+    schemaVersion: 1,
+    packageType: "bundle",
+    id: "proj",
+    name: "Proj",
+    version: "2.0.0",
+    description: "Project bundle",
+    packages: ["projpkg"],
+    plugins: [],
+    skills: ["skills/demo"],
+    config: [{source: "config/sample.txt", target: "~/.config/proj-sample.txt"}],
+    conflicts: [],
+    project: {root: "~/Work", layout: ["src", "public"], create: "project/create.sh"}
+  }' >"$bundle/bundle.json"
+# A second file that would show up if install executed arbitrary bundle files.
+cat >"$bundle/escape.sh" <<EOF
+#!/bin/bash
+printf 'executed\n' >"$home/bundle-executed"
+EOF
+chmod +x "$bundle/escape.sh"
+
+output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$bundle")
+[[ ! -e $home/bundle-executed ]] || fail "install executed a file from the bundle"
+[[ ! -e $home/Work/site/ran ]] || fail "install ran the project create script"
+grep -q projpkg <<<"$output" || fail "install plan names the package" "$output"
+[[ -L $home/.agents/skills/proj-demo ]] || fail "skill is linked into an existing agent folder"
+[[ $(readlink "$home/.agents/skills/proj-demo") == "$home/.local/share/omarchy/bundles/proj/skills/demo" ]] \
+  || fail "skill link points at the installed bundle"
+[[ $(<"$home/.config/proj-sample.txt") == from-bundle ]] || fail "config file was copied"
+receipt=$(jq -c '.bundles.proj' "$home/.local/state/omarchy/bundles/ledger.json")
+jq -e '.source != "" and .version == "2.0.0" and (.sha256 | test("^[a-f0-9]{64}$")) and (.installed_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T")) and .commit == null' <<<"$receipt" >/dev/null \
+  || fail "receipt records source, version, checksum, and installed time" "$receipt"
+pass "install copies data, links skills, and records a receipt without running bundle files"
+
+output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-project-new" proj my-site)
+[[ -d $home/Work/my-site/src && -d $home/Work/my-site/public ]] || fail "project layout folders were created" "$output"
+jq -e '.bundle_id == "proj" and .version == "2.0.0" and (.created_at | length) > 0' \
+  "$home/Work/my-site/.omarchy-project" >/dev/null \
+  || fail "project marker records the bundle id, version, and created time"
+grep -q 'Create script: project/create.sh' <<<"$output" || fail "project creation shows the create script" "$output"
+grep -q 'Not running the create script without confirmation.' <<<"$output" \
+  || fail "project creation says the script was not run" "$output"
+[[ ! -e $home/Work/my-site/ran && ! -e $home/Work/my-site/README.md ]] \
+  || fail "create script ran without confirmation"
+pass "project-new creates the folder and marker and does not run the script without confirmation"
+
+# 8. Git URL warning, and a registry name stops.
+home=$(new_home sources)
+git_stub="$home/git-bin"
+mkdir -p "$git_stub"
+fixture="$home/git-fixture"
+write_bundle "$fixture" git-bundle "Git Bundle" '["gitpkg"]'
+printf 'abc123\n' >"$home/commit.txt"
+BUNDLE_FIXTURE="$fixture" BUNDLE_COMMIT=$(<"$home/commit.txt")
+cat >"$git_stub/git" <<'EOF'
+#!/bin/bash
+if [[ $1 == clone ]]; then
+  dest="${!#}"
+  mkdir -p "$dest"
+  cp -a "$BUNDLE_FIXTURE"/. "$dest"/
+  mkdir -p "$dest/.git"
+  printf '%s\n' "$BUNDLE_COMMIT" >"$dest/.git/HEAD"
+  exit 0
+fi
+if [[ $1 == -C ]]; then
+  cat "$2/.git/HEAD"
+  exit 0
+fi
+printf 'unexpected git %s\n' "$*" >&2
+exit 1
+EOF
+chmod +x "$git_stub/git"
+output=$(
+  HOME="$home" \
+    XDG_DATA_HOME="$home/.local/share" \
+    XDG_STATE_HOME="$home/.local/state" \
+    XDG_CONFIG_HOME="$home/.config" \
+    BUNDLE_FIXTURE="$fixture" \
+    BUNDLE_COMMIT=$(<"$home/commit.txt") \
+    PATH="$git_stub:$stub_dir:$ROOT/bin:$PATH" \
+    "$ROOT/bin/omarchy-bundle-add" --yes "https://example.test/bundles/git-bundle.git" 2>&1
+) || fail "git bundle add failed" "$output"
+grep -q 'development/unsafe source' <<<"$output" || fail "git URL prints the unsafe-source warning" "$output"
+jq -e --arg commit "$(<"$home/commit.txt")" \
+  '.bundles["git-bundle"].source == "https://example.test/bundles/git-bundle.git" and .bundles["git-bundle"].commit == $commit and (.bundles["git-bundle"].sha256 | length) == 64' \
+  "$home/.local/state/omarchy/bundles/ledger.json" >/dev/null \
+  || fail "git receipt records the url and commit" "$(jq -c '.bundles["git-bundle"]' "$home/.local/state/omarchy/bundles/ledger.json")"
+pass "a git URL warns and the receipt records the commit"
+
+home=$(new_home registry)
+if output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "acme/widgets@1.2.0" 2>&1); then
+  fail "registry source was treated as available" "$output"
+fi
+grep -q 'registry not available yet' <<<"$output" || fail "registry source says the registry is not available" "$output"
+[[ ! -e $home/.local/state/omarchy/bundles/ledger.json ]] || fail "registry source wrote a ledger"
+pass "publisher/name@version stops because the registry is not available yet"
