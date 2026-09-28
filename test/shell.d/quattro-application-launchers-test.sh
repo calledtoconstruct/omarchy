@@ -110,13 +110,14 @@ mkdir -p "$icons"
 ln -s "$icons/missing.png" "$icons/GitHub.png"
 printf 'github-icon\n' >"$backup/GitHub.png"
 write_desktop "$apps/GitHub.desktop" "$icons/GitHub.png"
-printf 'chatgpt-icon\n' >"$backup/ChatGPT.png"
-write_desktop "$apps/ChatGPT.desktop" "$icons/ChatGPT.png"
+# Sorts after GitHub.desktop, so it is reached only if the loop carries on.
+printf 'whatsapp-icon\n' >"$backup/WhatsApp.png"
+write_desktop "$apps/WhatsApp.desktop" "$icons/WhatsApp.png"
 ALACRITTY_PRESENT=0 run_migration
 
 [[ -L $icons/GitHub.png ]] || fail "migration leaves a dangling icon symlink in place"
 [[ ! -e $icons/GitHub.png ]] || fail "migration does not replace a dangling icon symlink"
-[[ -f $icons/ChatGPT.png ]] || fail "migration still restores later launchers after a dangling icon symlink"
+[[ -f $icons/WhatsApp.png ]] || fail "migration still restores later launchers after a dangling icon symlink"
 pass "migration skips a dangling icon symlink without aborting"
 
 # omarchy-migrate runs migrations with bash -euo pipefail, and the Quattro
