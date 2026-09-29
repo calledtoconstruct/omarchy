@@ -213,6 +213,90 @@ grep -q drypkg <<<"$output" || fail "dry run names the package" "$output"
 [[ ! -e $home/calls.log ]] || fail "dry run called a package or plugin command" "$(cat "$home/calls.log")"
 pass "dry run changes nothing"
 
+# 4c. New plugins are enabled with --yes, and an interactive install can decline.
+home=$(new_home plugin-yes)
+write_bundle "$home/plug" plug-bundle "Plug" '[]'
+jq '.plugins = ["https://example.test/gamemode-switcher.git"]' \
+  "$home/plug/bundle.json" >"$home/plug/bundle.json.next"
+mv "$home/plug/bundle.json.next" "$home/plug/bundle.json"
+mkdir -p "$home/bin"
+cat >"$home/bin/omarchy-plugin-add" <<'EOF'
+#!/bin/bash
+printf 'omarchy-plugin-add %s\n' "$*" >>"$HOME/calls.log"
+echo "Added example.plugin into $HOME/plugins/example.plugin"
+exit 0
+EOF
+chmod +x "$home/bin/omarchy-plugin-add"
+output=$(
+  HOME="$home" \
+    XDG_DATA_HOME="$home/.local/share" \
+    XDG_STATE_HOME="$home/.local/state" \
+    XDG_CONFIG_HOME="$home/.config" \
+    PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+    "$ROOT/bin/omarchy-bundle-add" --dry-run --yes "$home/plug"
+)
+grep -q 'New plugins are enabled.' <<<"$output" || fail "dry run with --yes says new plugins are enabled" "$output"
+[[ ! -e $home/calls.log ]] || fail "dry run called plugin add" "$(cat "$home/calls.log")"
+output=$(
+  HOME="$home" \
+    XDG_DATA_HOME="$home/.local/share" \
+    XDG_STATE_HOME="$home/.local/state" \
+    XDG_CONFIG_HOME="$home/.config" \
+    PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+    "$ROOT/bin/omarchy-bundle-add" --yes "$home/plug"
+)
+calls_have "$home" "omarchy-plugin-add --yes --enable -- https://example.test/gamemode-switcher.git" \
+  || fail "bundle add --yes enables new plugins" "$(cat "$home/calls.log")"
+grep -q 'New plugins are enabled.' <<<"$output" || fail "install with --yes says new plugins are enabled" "$output"
+pass "bundle add --yes enables new plugins"
+
+home=$(new_home plugin-ask)
+write_bundle "$home/plug" plug-ask "Plug Ask" '[]'
+jq '.plugins = ["https://example.test/gamemode-switcher.git"]' \
+  "$home/plug/bundle.json" >"$home/plug/bundle.json.next"
+mv "$home/plug/bundle.json.next" "$home/plug/bundle.json"
+output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --dry-run "$home/plug")
+grep -q 'You will be asked whether to enable the new plugins.' <<<"$output" \
+  || fail "interactive dry run says the enable prompt will be asked" "$output"
+if script -qec true /dev/null >/dev/null 2>&1; then
+  mkdir -p "$home/bin"
+  cat >"$home/bin/omarchy-plugin-add" <<'EOF'
+#!/bin/bash
+printf 'omarchy-plugin-add %s\n' "$*" >>"$HOME/calls.log"
+echo "Added example.plugin into $HOME/plugins/example.plugin"
+exit 0
+EOF
+  cat >"$home/bin/gum" <<'EOF'
+#!/bin/bash
+printf 'gum %s\n' "$*" >>"$HOME/calls.log"
+if [[ $* == *"Enable this bundle's plugins?"* ]]; then
+  exit 1
+fi
+exit 0
+EOF
+  chmod +x "$home/bin/omarchy-plugin-add" "$home/bin/gum"
+  status=0
+  raw=$(
+    HOME="$home" \
+      XDG_DATA_HOME="$home/.local/share" \
+      XDG_STATE_HOME="$home/.local/state" \
+      XDG_CONFIG_HOME="$home/.config" \
+      PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+      script -qec "'$ROOT/bin/omarchy-bundle-add' '$home/plug'" /dev/null
+  ) || status=$?
+  output=$(tr -d '\r' <<<"$raw")
+  (( status == 0 )) || fail "declining plugin enable aborted the install" "$output"
+  calls_have "$home" "omarchy-plugin-add --yes -- https://example.test/gamemode-switcher.git" \
+    || fail "declining enable adds the plugin without --enable" "$(cat "$home/calls.log")"
+  if grep -q -- '--enable' "$home/calls.log"; then
+    fail "declining enable still passed --enable" "$(cat "$home/calls.log")"
+  fi
+  grep -q 'Leaving the new plugins disabled.' <<<"$output" || fail "declining enable says the plugins stay disabled" "$output"
+  pass "an interactive install can leave new plugins disabled"
+else
+  skip "script -qec unavailable; skipping the interactive plugin-enable prompt"
+fi
+
 # 4b. An installed machine symlinks ~/.local/share/omarchy at the system tree.
 home=$(new_home share-link)
 system="$HOME_DIR/fake-usr-share-omarchy"
