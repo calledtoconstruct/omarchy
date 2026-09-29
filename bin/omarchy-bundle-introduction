@@ -48,8 +48,39 @@ file="$dest/$introduction"
 file_real=$(realpath -- "$file")
 [[ $file_real == "$dest_real"/* ]] || bundle_fail "introduction path leaves the bundle: '$introduction'"
 
-cat -- "$file_real"
-if [[ -t 0 && -t 1 ]]; then
-  echo
-  read -r -p "Press Enter to close."
-fi
+hypr_dispatch() {
+  local lua="$1"
+  shift
+  hyprctl dispatch "$lua" >/dev/null 2>&1 || hyprctl dispatch "$@" >/dev/null 2>&1 || true
+}
+
+float_introduction() {
+  local before now addr floating window attempt
+  before=$(hyprctl clients -j 2>/dev/null || true)
+  [[ -n $before ]] || before='[]'
+  setsid -f omawrite "$file_real" >/dev/null 2>&1 || bundle_fail "could not open $file_real in omawrite"
+  for (( attempt = 0; attempt < 40; attempt++ )); do
+    now=$(hyprctl clients -j 2>/dev/null || true)
+    [[ -n $now ]] || now='[]'
+    addr=$(jq -nr --argjson before "$before" --argjson now "$now" '
+      ($before | map(.address)) as $seen
+      | [$now[] | select(.class == "omawrite") | select(.address as $a | $seen | index($a) | not) | .address]
+      | first // empty
+    ' || true)
+    [[ -n $addr ]] && break
+    sleep 0.05
+  done
+  [[ -n $addr ]] || return 0
+  floating=$(jq -nr --argjson now "$now" --arg addr "$addr" '
+    [$now[] | select(.address == $addr) | .floating] | first // false
+  ' || true)
+  window="address:$addr"
+  if [[ $floating != "true" ]]; then
+    hypr_dispatch "hl.dsp.window.float({ window = \"$window\", action = \"toggle\" })" togglefloating "$window"
+  fi
+  hypr_dispatch "hl.dsp.window.resize({ window = \"$window\", x = 1100, y = 780 })" resizewindowpixel "exact 1100 780,$window"
+  hypr_dispatch "hl.dsp.window.center({ window = \"$window\" })" centerwindow "$window"
+  hypr_dispatch "hl.dsp.focus({ window = \"$window\" })" focuswindow "$window"
+}
+
+float_introduction

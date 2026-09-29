@@ -354,11 +354,42 @@ output=$(
     PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
     "$ROOT/bin/omarchy-bundle-add" --yes "$home/intro-bundle"
 )
-calls_have "$home" "omarchy-notification-send -u normal -t 0 Bundle Intro Bundle installed Click to see the introduction. --exec omarchy-launch-tui omarchy-bundle-introduction -- intro-bundle" \
+calls_have "$home" "omarchy-notification-send -u normal -t 0 Bundle Intro Bundle installed Click to see the introduction. --exec omarchy-bundle-introduction -- intro-bundle" \
   || fail "install notifies with a click command for the introduction" "$(cat "$home/calls.log")"
-shown=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-introduction" -- intro-bundle)
-grep -q 'How to use Intro Bundle.' <<<"$shown" || fail "introduction command prints the file" "$shown"
-pass "an introduction notifies and opens as text"
+cat >"$home/bin/omawrite" <<'EOF'
+#!/bin/bash
+printf 'omawrite %s\n' "$*" >>"$HOME/calls.log"
+exit 0
+EOF
+cat >"$home/bin/hyprctl" <<'EOF'
+#!/bin/bash
+printf 'hyprctl %s\n' "$*" >>"$HOME/hypr.log"
+if [[ $1 == clients ]]; then
+  n=$(cat "$HOME/hypr-clients-n" 2>/dev/null || echo 0)
+  n=$((n + 1))
+  printf '%s\n' "$n" >"$HOME/hypr-clients-n"
+  if (( n == 1 )); then
+    printf '%s\n' '[]'
+  else
+    printf '%s\n' '[{"address":"0xabc","pid":1,"floating":false,"class":"omawrite","title":"introduction.md - Omawrite"}]'
+  fi
+fi
+exit 0
+EOF
+chmod +x "$home/bin/omawrite" "$home/bin/hyprctl"
+HOME="$home" \
+  XDG_DATA_HOME="$home/.local/share" \
+  XDG_STATE_HOME="$home/.local/state" \
+  XDG_CONFIG_HOME="$home/.config" \
+  PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+  "$ROOT/bin/omarchy-bundle-introduction" -- intro-bundle >/dev/null
+grep -q 'omarchy-bundles/intro-bundle/introduction.md' "$home/calls.log" \
+  || fail "introduction opens the installed file in omawrite" "$(cat "$home/calls.log")"
+grep -F 'hl.dsp.window.float({ window = "address:0xabc", action = "toggle" })' "$home/hypr.log" >/dev/null \
+  || fail "introduction floats the new omawrite window" "$(cat "$home/hypr.log")"
+grep -F 'hl.dsp.window.center({ window = "address:0xabc" })' "$home/hypr.log" >/dev/null \
+  || fail "introduction centers the new omawrite window" "$(cat "$home/hypr.log")"
+pass "an introduction opens in omawrite, floating and centered"
 
 # 4b. An installed machine symlinks ~/.local/share/omarchy at the system tree.
 home=$(new_home share-link)
