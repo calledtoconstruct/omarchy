@@ -38,6 +38,30 @@ done
 exit 0
 EOF
 
+cat >"$stub_dir/omarchy-pkg-aur-add" <<'EOF'
+#!/bin/bash
+printf 'omarchy-pkg-aur-add %s\n' "$*" >>"$HOME/calls.log"
+touch "$HOME/installed.list" "$HOME/explicit.list"
+for pkg in "$@"; do
+  printf '%s\n' "$pkg" >>"$HOME/installed.list"
+  printf '%s\n' "$pkg" >>"$HOME/explicit.list"
+done
+exit 0
+EOF
+
+cat >"$stub_dir/omarchy-pkg-aur-drop" <<'EOF'
+#!/bin/bash
+printf 'omarchy-pkg-aur-drop %s\n' "$*" >>"$HOME/calls.log"
+touch "$HOME/installed.list" "$HOME/explicit.list"
+for pkg in "$@"; do
+  grep -vxF -- "$pkg" "$HOME/installed.list" >"$HOME/installed.list.next" || true
+  mv -f "$HOME/installed.list.next" "$HOME/installed.list"
+  grep -vxF -- "$pkg" "$HOME/explicit.list" >"$HOME/explicit.list.next" || true
+  mv -f "$HOME/explicit.list.next" "$HOME/explicit.list"
+done
+exit 0
+EOF
+
 cat >"$stub_dir/omarchy-pkg-drop" <<'EOF'
 #!/bin/bash
 printf 'omarchy-pkg-drop %s\n' "$*" >>"$HOME/calls.log"
@@ -81,11 +105,11 @@ run_bundle() {
 }
 
 write_bundle() {
-  local dir="$1" id="$2" name="$3" packages="$4" conflicts="${5:-[]}"
+  local dir="$1" id="$2" name="$3" packages="$4" conflicts="${5:-[]}" aur="${6:-[]}"
   mkdir -p "$dir"
   jq -n \
     --arg id "$id" --arg name "$name" \
-    --argjson packages "$packages" --argjson conflicts "$conflicts" \
+    --argjson packages "$packages" --argjson conflicts "$conflicts" --argjson aur "$aur" \
     '{
       schemaVersion: 1,
       packageType: "bundle",
@@ -94,6 +118,7 @@ write_bundle() {
       version: "1.0.0",
       description: $name,
       packages: $packages,
+      aurPackages: $aur,
       plugins: [],
       skills: [],
       config: [],
@@ -127,6 +152,17 @@ if grep -qxF sharedpkg "$home/installed.list"; then
   fail "shared package is still installed after both bundles are removed" "$(cat "$home/installed.list")"
 fi
 pass "shared package stays until both bundles are removed"
+
+# 1b. Official packages and AUR packages use different commands.
+home=$(new_home aur)
+write_bundle "$home/mix" mixed "Mixed" '["gamemode"]' '[]' '["protonup-qt"]'
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/mix" >/dev/null
+calls_have "$home" "omarchy-pkg-add gamemode" || fail "official package uses omarchy-pkg-add" "$(cat "$home/calls.log")"
+calls_have "$home" "omarchy-pkg-aur-add protonup-qt" || fail "AUR package uses omarchy-pkg-aur-add" "$(cat "$home/calls.log")"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-remove" --yes mixed >/dev/null
+calls_have "$home" "omarchy-pkg-drop gamemode" || fail "official package uses omarchy-pkg-drop" "$(cat "$home/calls.log")"
+calls_have "$home" "omarchy-pkg-aur-drop protonup-qt" || fail "AUR package uses omarchy-pkg-aur-drop" "$(cat "$home/calls.log")"
+pass "official and AUR packages install and remove through their own commands"
 
 # 2. A package you installed yourself is never removed. A file that already
 # existed is kept too.
@@ -238,6 +274,7 @@ jq -n \
     version: "2.0.0",
     description: "Project bundle",
     packages: ["projpkg"],
+    aurPackages: [],
     plugins: [],
     skills: ["skills/demo"],
     config: [{source: "config/sample.txt", target: "~/.config/proj-sample.txt"}],

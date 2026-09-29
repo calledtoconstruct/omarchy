@@ -232,7 +232,7 @@ bundle_validate() {
     [[ -n $field ]] || continue
     bundle_fail "unknown key '$field' in $manifest"
   done < <(jq -r '
-    (keys - ["schemaVersion","packageType","id","name","version","description","packages","plugins","skills","config","conflicts","project"])[]
+    (keys - ["schemaVersion","packageType","id","name","version","description","packages","aurPackages","plugins","skills","config","conflicts","project"])[]
   ' "$manifest")
 
   if jq -e 'has("packageType")' "$manifest" >/dev/null; then
@@ -240,7 +240,7 @@ bundle_validate() {
       || bundle_fail "'packageType' must be \"bundle\" when present"
   fi
 
-  for field in id name version description packages plugins skills config conflicts; do
+  for field in id name version description packages aurPackages plugins skills config conflicts; do
     jq -e --arg f "$field" 'has($f)' "$manifest" >/dev/null 2>&1 \
       || bundle_fail "manifest missing required field '$field'"
   done
@@ -253,18 +253,26 @@ bundle_validate() {
   value=$(jq -r '.id' "$manifest")
   bundle_valid_id "$value" || bundle_fail "invalid bundle id '$value'"
 
-  for field in packages plugins skills conflicts; do
+  for field in packages aurPackages plugins skills conflicts; do
     jq -e --arg f "$field" '(.[$f] | type) == "array"' "$manifest" >/dev/null \
       || bundle_fail "'$field' must be an array"
   done
   jq -e '(.config | type) == "array"' "$manifest" >/dev/null || bundle_fail "'config' must be an array"
 
-  jq -e '(.packages | unique | length) == (.packages | length)' "$manifest" >/dev/null \
-    || bundle_fail "'packages' contains a duplicate"
+  for field in packages aurPackages; do
+    jq -e --arg f "$field" '(.[$f] | unique | length) == (.[$f] | length)' "$manifest" >/dev/null \
+      || bundle_fail "'$field' contains a duplicate"
+    while IFS= read -r value; do
+      [[ -n $value ]] || continue
+      bundle_valid_package_name "$value" || bundle_fail "invalid package name '$value'"
+    done < <(jq -r --arg f "$field" '.[$f][]' "$manifest")
+  done
   while IFS= read -r value; do
     [[ -n $value ]] || continue
-    bundle_valid_package_name "$value" || bundle_fail "invalid package name '$value'"
-  done < <(jq -r '.packages[]' "$manifest")
+    if jq -e --arg name "$value" '(.packages | index($name)) != null' "$manifest" >/dev/null; then
+      bundle_fail "package '$value' is listed in both packages and aurPackages"
+    fi
+  done < <(jq -r '.aurPackages[]' "$manifest")
 
   while IFS= read -r value; do
     [[ -n $value ]] || continue

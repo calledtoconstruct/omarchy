@@ -67,11 +67,12 @@ jq -n '{packages:[], plugins:[], skills:[], configs:[]}' >"$plan"
 
 jq -c --arg id "$bundle_id" '
   .packages | to_entries[] | select(.value.owners | index($id) != null) |
-  {name: .key, user_owned: .value.user_owned, owners: (.value.owners | length)}
+  {name: .key, user_owned: .value.user_owned, owners: (.value.owners | length), source: (.value.source // "repo")}
 ' <<<"$ledger" | while IFS= read -r row; do
   name_item=$(jq -r '.name' <<<"$row")
   user_owned=$(jq -r '.user_owned' <<<"$row")
   owners=$(jq -r '.owners' <<<"$row")
+  source=$(jq -r '.source' <<<"$row")
   if (( owners > 1 )); then
     action=keep
     note="kept, still owned by another bundle"
@@ -82,8 +83,9 @@ jq -c --arg id "$bundle_id" '
     action=drop
     note="remove"
   fi
-  jq --arg name "$name_item" --arg action "$action" --arg note "$note" --argjson user_owned "$user_owned" \
-    '.packages += [{name:$name, action:$action, note:$note, user_owned:$user_owned}]' "$plan" >"$plan.next"
+  jq --arg name "$name_item" --arg action "$action" --arg note "$note" --arg source "$source" \
+    --argjson user_owned "$user_owned" \
+    '.packages += [{name:$name, action:$action, note:$note, user_owned:$user_owned, source:$source}]' "$plan" >"$plan.next"
   mv -f -- "$plan.next" "$plan"
 done
 
@@ -156,7 +158,10 @@ done
 echo "Bundle: $name ($bundle_id) $version"
 echo
 echo "Packages:"
-jq -r 'if (.packages | length) == 0 then "  (none)" else .packages[] | "  \(if .action == "drop" then "-" else "=" end) \(.name)  (\(.note))" end' "$plan"
+jq -r 'if ([.packages[] | select(.source != "aur")] | length) == 0 then "  (none)" else .packages[] | select(.source != "aur") | "  \(if .action == "drop" then "-" else "=" end) \(.name)  (\(.note))" end' "$plan"
+echo
+echo "AUR packages:"
+jq -r 'if ([.packages[] | select(.source == "aur")] | length) == 0 then "  (none)" else .packages[] | select(.source == "aur") | "  \(if .action == "drop" then "-" else "=" end) \(.name)  (\(.note))" end' "$plan"
 echo
 echo "Plugins:"
 jq -r 'if (.plugins | length) == 0 then "  (none)" else .plugins[] | "  \(if .action == "drop" then "-" else "=" end) \(.id)  (\(.note))" end' "$plan"
@@ -175,9 +180,13 @@ fi
 
 bundle_confirm "Remove this bundle?" || bundle_fail "aborted"
 
-mapfile -t to_drop < <(jq -r '.packages[] | select(.action == "drop") | .name' "$plan")
-if (( ${#to_drop[@]} > 0 )); then
-  omarchy-pkg-drop "${to_drop[@]}"
+mapfile -t repo_drop < <(jq -r '.packages[] | select(.action == "drop" and .source != "aur") | .name' "$plan")
+mapfile -t aur_drop < <(jq -r '.packages[] | select(.action == "drop" and .source == "aur") | .name' "$plan")
+if (( ${#repo_drop[@]} > 0 )); then
+  omarchy-pkg-drop "${repo_drop[@]}"
+fi
+if (( ${#aur_drop[@]} > 0 )); then
+  omarchy-pkg-aur-drop "${aur_drop[@]}"
 fi
 
 while IFS= read -r plugin_id; do

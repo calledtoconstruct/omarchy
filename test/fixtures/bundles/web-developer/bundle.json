@@ -6,6 +6,7 @@
   "version": "1.0.0",
   "description": "A local web project setup. Packages are the ones omarchy-install-dev-env installs with pacman.",
   "packages": ["libyaml", "symfony-cli", "rlwrap"],
+  "aurPackages": [],
   "plugins": [],
   "skills": ["skills/web-setup"],
   "config": [

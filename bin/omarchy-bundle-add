@@ -141,8 +141,8 @@ append_plan() {
   mv -f -- "$plan.next" "$plan"
 }
 
-while IFS= read -r pkg; do
-  [[ -n $pkg ]] || continue
+queue_package() {
+  local pkg="$1" source="$2" action user_owned note
   if jq -e --arg pkg "$pkg" '.packages[$pkg] != null' <<<"$ledger" >/dev/null; then
     user_owned=$(jq -r --arg pkg "$pkg" '.packages[$pkg].user_owned' <<<"$ledger")
     if bundle_package_present "$pkg"; then
@@ -168,9 +168,20 @@ while IFS= read -r pkg; do
   fi
   # shellcheck disable=SC2016
   append_plan \
-    --arg name "$pkg" --arg action "$action" --arg note "$note" --argjson user_owned "$user_owned" \
-    '.packages += [{name:$name, action:$action, note:$note, user_owned:$user_owned}]'
+    --arg name "$pkg" --arg action "$action" --arg note "$note" --arg source "$source" \
+    --argjson user_owned "$user_owned" \
+    '.packages += [{name:$name, action:$action, note:$note, user_owned:$user_owned, source:$source}]'
+}
+
+while IFS= read -r pkg; do
+  [[ -n $pkg ]] || continue
+  queue_package "$pkg" repo
 done < <(jq -r '.packages[]' "$bundle_dir/bundle.json")
+
+while IFS= read -r pkg; do
+  [[ -n $pkg ]] || continue
+  queue_package "$pkg" aur
+done < <(jq -r '.aurPackages[]' "$bundle_dir/bundle.json")
 
 while IFS= read -r plugin; do
   [[ -n $plugin ]] || continue
@@ -272,7 +283,10 @@ echo "Bundle: $name ($id) $version"
 echo "Source: $source_label"
 echo
 echo "Packages:"
-jq -r 'if (.packages | length) == 0 then "  (none)" else .packages[] | "  \(if .action == "install" then "+" else "=" end) \(.name)  (\(.note))" end' "$plan"
+jq -r 'if ([.packages[] | select(.source != "aur")] | length) == 0 then "  (none)" else .packages[] | select(.source != "aur") | "  \(if .action == "install" then "+" else "=" end) \(.name)  (\(.note))" end' "$plan"
+echo
+echo "AUR packages:"
+jq -r 'if ([.packages[] | select(.source == "aur")] | length) == 0 then "  (none)" else .packages[] | select(.source == "aur") | "  \(if .action == "install" then "+" else "=" end) \(.name)  (\(.note))" end' "$plan"
 echo
 echo "Plugins:"
 jq -r 'if (.plugins | length) == 0 then "  (none)" else .plugins[] | "  \(if .action == "add" then "+" else "=" end) \(.source)  (\(.note))" end' "$plan"
@@ -337,9 +351,13 @@ while IFS= read -r row; do
   mv -f -- "$resolved.next" "$resolved"
 done < <(jq -c '.plugins[]' "$plan")
 
-mapfile -t to_install < <(jq -r '.packages[] | select(.action == "install") | .name' "$plan")
-if (( ${#to_install[@]} > 0 )); then
-  omarchy-pkg-add "${to_install[@]}"
+mapfile -t repo_install < <(jq -r '.packages[] | select(.action == "install" and .source != "aur") | .name' "$plan")
+mapfile -t aur_install < <(jq -r '.packages[] | select(.action == "install" and .source == "aur") | .name' "$plan")
+if (( ${#repo_install[@]} > 0 )); then
+  omarchy-pkg-add "${repo_install[@]}"
+fi
+if (( ${#aur_install[@]} > 0 )); then
+  omarchy-pkg-aur-add "${aur_install[@]}"
 fi
 
 receipt=$(bundle_receipt_json "$source_label" "$version" "$sha" "$commit" "$name")
@@ -354,7 +372,7 @@ updated=$(jq -c \
       if .packages[$item.name] then
         .packages[$item.name].owners = ((.packages[$item.name].owners + [$id]) | unique)
       else
-        .packages[$item.name] = {owners: [$id], user_owned: $item.user_owned}
+        .packages[$item.name] = {owners: [$id], user_owned: $item.user_owned, source: $item.source}
       end)
   | reduce $plugins[0][] as $item (.;
       if .plugins[$item.id] then
