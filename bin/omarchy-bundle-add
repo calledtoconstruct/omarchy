@@ -446,7 +446,7 @@ echo "Installed $id into $dest"
 if [[ -n $introduction ]]; then
   if ! omarchy-notification-send -u normal -t 0 \
     "Bundle $name installed" "Click to see the introduction." \
-    --exec omarchy-launch-tui omarchy-bundle-introduction -- "$id"; then
+    --exec omarchy-bundle-introduction -- "$id"; then
     echo "Installed $id, but the introduction notification could not be sent." >&2
   fi
 fi

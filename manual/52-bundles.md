@@ -53,7 +53,7 @@ A bundle is a directory with `bundle.json` at the root. `omarchy bundle validate
 | `config` | Files to copy. `source` is a relative path in the bundle. `target` is under your home directory, usually `~/...`. |
 | `conflicts` | Bundle ids that may not be installed at the same time. |
 | `project` | Optional. `root` defaults to `~/Work`. `layout` is folders to create. `create` is a script path, used only by `omarchy bundle project new`. |
-| `introduction` | Optional path to a text file in the bundle. After install, a notification says the bundle is installed and opens this file when clicked. |
+| `introduction` | Optional path to a Markdown file in the bundle. After install, a notification says the bundle is installed. The click opens the file in Omawrite, floating in the center. |
 
 Paths in the manifest are relative. `..` is rejected. Config targets cannot be absolute paths outside your home directory.
 
@@ -77,7 +77,7 @@ The ledger also records, for every package, plugin, skill link, and config file,
 
 Installing prints a plan of what is new and what is already present, then asks. It installs missing packages first, then plugins, then skill links and config files. Removing drops this bundle's ownership, prints a plan, and asks. Something is deleted only when no remaining bundle owns it and it was not yours. Packages are removed with `omarchy-pkg-drop` after that check. Plugins are removed with `omarchy-plugin-remove` after that check. Your own packages and files stay.
 
-When `introduction` is set, a successful install sends a notification. The headline is `Bundle <name> installed` and the body is `Click to see the introduction.` The click opens that file in a terminal. The file is shown as text. Install does not run it.
+When `introduction` is set, a successful install sends a notification. The headline is `Bundle <name> installed` and the body is `Click to see the introduction.` The click opens that file in [Omawrite](https://github.com/omacom-io/omawrite), floating in the center of the screen. Install does not run the file.
 
 ## Skills
 
