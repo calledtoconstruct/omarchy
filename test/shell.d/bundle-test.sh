@@ -173,9 +173,21 @@ output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --dry-run "$home/dry-
 grep -q 'Dry run: nothing was installed.' <<<"$output" || fail "dry run says nothing was installed" "$output"
 grep -q drypkg <<<"$output" || fail "dry run names the package" "$output"
 [[ ! -e $home/.local/state/omarchy/bundles/ledger.json ]] || fail "dry run wrote a ledger"
-[[ ! -e $home/.local/share/omarchy/bundles ]] || fail "dry run copied the bundle"
+[[ ! -e $home/.local/share/omarchy-bundles ]] || fail "dry run copied the bundle"
 [[ ! -e $home/calls.log ]] || fail "dry run called a package or plugin command" "$(cat "$home/calls.log")"
 pass "dry run changes nothing"
+
+# 4b. An installed machine symlinks ~/.local/share/omarchy at the system tree.
+home=$(new_home share-link)
+system="$HOME_DIR/fake-usr-share-omarchy"
+mkdir -p "$system"
+ln -s "$system" "$home/.local/share/omarchy"
+write_bundle "$home/linked" linked-bundle "Linked" '["linkedpkg"]'
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/linked" >/dev/null
+[[ -d $home/.local/share/omarchy-bundles/linked-bundle ]] \
+  || fail "bundle copy missed ~/.local/share/omarchy-bundles" "$(ls -la "$home/.local/share")"
+[[ ! -e $system/bundles ]] || fail "bundle copy followed the share/omarchy symlink" "$(find "$system" -maxdepth 2 -type d)"
+pass "bundle copy stays off the system omarchy symlink"
 
 # 5. Validate.
 output=$(run_bundle "$HOME_DIR" "$ROOT/bin/omarchy-bundle-validate" "$ROOT/test/fixtures/bundles/web-developer")
@@ -244,7 +256,7 @@ output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$bundle")
 [[ ! -e $home/Work/site/ran ]] || fail "install ran the project create script"
 grep -q projpkg <<<"$output" || fail "install plan names the package" "$output"
 [[ -L $home/.agents/skills/proj-demo ]] || fail "skill is linked into an existing agent folder"
-[[ $(readlink "$home/.agents/skills/proj-demo") == "$home/.local/share/omarchy/bundles/proj/skills/demo" ]] \
+[[ $(readlink "$home/.agents/skills/proj-demo") == "$home/.local/share/omarchy-bundles/proj/skills/demo" ]] \
   || fail "skill link points at the installed bundle"
 [[ $(<"$home/.config/proj-sample.txt") == from-bundle ]] || fail "config file was copied"
 receipt=$(jq -c '.bundles.proj' "$home/.local/state/omarchy/bundles/ledger.json")

@@ -58,7 +58,7 @@ Examples live in `test/fixtures/bundles/` in the Omarchy repo. They are for tryi
 
 ## Where it lands
 
-The folder is copied to `~/.local/share/omarchy/bundles/<id>/`. The ledger is `~/.local/state/omarchy/bundles/ledger.json`. Writes go to a temporary file in that directory and then `mv`, so a crash mid-write does not leave a half-written ledger.
+The folder is copied to `~/.local/share/omarchy-bundles/<id>/`. On an installed system `~/.local/share/omarchy` is a symlink to `/usr/share/omarchy`, so the copy lives beside that link. The ledger is `~/.local/state/omarchy/bundles/ledger.json`. Writes go to a temporary file in that directory and then `mv`, so a crash mid-write does not leave a half-written ledger.
 
 Each installed bundle has a receipt with the same field names as a registry install receipt where they mean the same thing:
 

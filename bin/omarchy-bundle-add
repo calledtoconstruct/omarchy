@@ -32,7 +32,7 @@ while (( $# > 0 )); do
     cat <<USAGE
 Usage: omarchy bundle add <path|git-url|publisher/name[@version]> [--dry-run] [--yes]
 
-Copies a bundle into ~/.local/share/omarchy/bundles and records ownership
+Copies a bundle into ~/.local/share/omarchy-bundles and records ownership
 in the bundle ledger. Installs missing packages and plugins. Does not run
 any file from the bundle.
 USAGE
