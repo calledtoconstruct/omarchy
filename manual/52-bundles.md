@@ -42,13 +42,13 @@ A bundle is a directory with `bundle.json` at the root. `omarchy bundle validate
 
 `schemaVersion` must be the number 1. `id`, `name`, `version`, and `description` are required strings. The id uses the same shape as a plugin id, and it cannot use the reserved `omarchy.*` namespace. Unknown top-level keys are rejected.
 
-`packageType` is optional. When you set it, it must be `"bundle"`. That is the same idea as a theme package's `"packageType": "theme"`: a bundle is data, not a plugin, and a later registry can publish it beside plugins and themes without changing this file's shape. Themes already refuse executables, symlinks, and install hooks. A bundle follows that rule at install time: symlinks and special files are rejected, `packages` go through `omarchy-pkg-add` and `omarchy-pkg-drop`, `aurPackages` go through `omarchy-pkg-aur-add` and `omarchy-pkg-aur-drop`, plugins go through `omarchy-plugin-add`, and no file from the bundle is executed.
+`packageType` is optional. When you set it, it must be `"bundle"`. That is the same idea as a theme package's `"packageType": "theme"`: a bundle is data, not a plugin, and a later registry can publish it beside plugins and themes without changing this file's shape. Themes already refuse executables, symlinks, and install hooks. A bundle follows that rule at install time: symlinks and special files are rejected, `packages` go through `omarchy-pkg-add` and `omarchy-pkg-drop`, `aurPackages` go through `omarchy-pkg-aur-add` and `omarchy-pkg-aur-drop`, and plugins go through `omarchy-plugin-add`. New plugins are enabled when you pass `--yes`. Otherwise the install asks once whether to enable them, and declining leaves them installed and disabled. No file from the bundle is executed.
 
 | Field | Meaning |
 | --- | --- |
 | `packages` | Official Arch package names from core, extra, or multilib. Missing ones are installed with `omarchy-pkg-add`. Names already on the machine are left as they are. |
 | `aurPackages` | AUR package names. Missing ones are installed with `omarchy-pkg-aur-add`. Removal uses `omarchy-pkg-aur-drop`. |
-| `plugins` | A plugin git URL, or the id of a plugin that is already installed. |
+| `plugins` | A plugin git URL, or the id of a plugin that is already installed. A git URL is added with `omarchy-plugin-add`. `--yes` also passes `--enable`. An interactive install asks once whether to enable the new plugins. |
 | `skills` | Folders inside the bundle. Each one contains a `SKILL.md`. |
 | `config` | Files to copy. `source` is a relative path in the bundle. `target` is under your home directory, usually `~/...`. |
 | `conflicts` | Bundle ids that may not be installed at the same time. |
