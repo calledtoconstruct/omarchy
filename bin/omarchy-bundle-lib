@@ -33,8 +33,11 @@ bundle_confirm() {
   fi
 }
 
+# ~/.local/share/omarchy is a symlink to /usr/share/omarchy on an installed
+# system. Copies go next to that link so install does not try to write the
+# system tree.
 bundle_data_root() {
-  printf '%s\n' "${XDG_DATA_HOME:-$HOME/.local/share}/omarchy/bundles"
+  printf '%s\n' "${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-bundles"
 }
 
 bundle_ledger_path() {
