@@ -6,6 +6,7 @@
   "version": "1.0.0",
   "description": "Steam, Lutris, and GameMode.",
   "packages": ["steam", "lutris", "gamemode"],
+  "aurPackages": [],
   "plugins": [],
   "skills": [],
   "config": [],
