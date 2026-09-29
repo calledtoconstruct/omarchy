@@ -1,0 +1,55 @@
+#!/bin/bash
+
+# omarchy:summary=Show an installed bundle's introduction
+# omarchy:group=bundle
+# omarchy:args=<id>
+
+set -euo pipefail
+
+BUNDLE_CMD=omarchy-bundle-introduction
+# shellcheck source=omarchy-bundle-lib
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/omarchy-bundle-lib"
+
+id=""
+while (( $# > 0 )); do
+  case "$1" in
+  --)
+    shift
+    ;;
+  -h | --help)
+    echo "Usage: omarchy bundle introduction <id>"
+    exit 0
+    ;;
+  -*)
+    bundle_fail "unknown introduction option: $1"
+    ;;
+  *)
+    [[ -z $id ]] || bundle_fail "unexpected argument: $1"
+    id="$1"
+    shift
+    ;;
+  esac
+done
+
+[[ -n $id ]] || bundle_fail "a bundle id is required"
+bundle_valid_id "$id" || bundle_fail "invalid bundle id '$id'"
+
+dest="$(bundle_data_root)/$id"
+manifest="$dest/bundle.json"
+[[ -f $manifest ]] || bundle_fail "bundle '$id' is not installed"
+
+introduction=$(jq -r 'if has("introduction") then .introduction else "" end' "$manifest")
+[[ -n $introduction ]] || bundle_fail "bundle '$id' has no introduction"
+bundle_safe_rel "$introduction" || bundle_fail "introduction path must be a safe relative path: '$introduction'"
+
+dest_real=$(realpath -- "$dest")
+file="$dest/$introduction"
+[[ -f $file ]] || bundle_fail "introduction file not found: '$introduction'"
+file_real=$(realpath -- "$file")
+[[ $file_real == "$dest_real"/* ]] || bundle_fail "introduction path leaves the bundle: '$introduction'"
+
+cat -- "$file_real"
+if [[ -t 0 && -t 1 ]]; then
+  echo
+  read -r -p "Press Enter to close."
+fi

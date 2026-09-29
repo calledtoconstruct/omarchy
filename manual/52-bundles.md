@@ -53,6 +53,7 @@ A bundle is a directory with `bundle.json` at the root. `omarchy bundle validate
 | `config` | Files to copy. `source` is a relative path in the bundle. `target` is under your home directory, usually `~/...`. |
 | `conflicts` | Bundle ids that may not be installed at the same time. |
 | `project` | Optional. `root` defaults to `~/Work`. `layout` is folders to create. `create` is a script path, used only by `omarchy bundle project new`. |
+| `introduction` | Optional path to a text file in the bundle. After install, a notification says the bundle is installed and opens this file when clicked. |
 
 Paths in the manifest are relative. `..` is rejected. Config targets cannot be absolute paths outside your home directory.
 
@@ -74,7 +75,9 @@ Each installed bundle has a receipt with the same field names as a registry inst
 
 The ledger also records, for every package, plugin, skill link, and config file, which bundle ids own it and whether it was yours before any bundle owned it. A package counts as yours when it was already listed by `pacman -Qqe` (explicitly installed, not pulled in as a dependency). A file or link counts as yours when it already existed.
 
-Installing prints a plan of what is new and what is already present, then asks. It installs only what is missing. Removing drops this bundle's ownership, prints a plan, and asks. Something is deleted only when no remaining bundle owns it and it was not yours. Packages are removed with `omarchy-pkg-drop` after that check. Plugins are removed with `omarchy-plugin-remove` after that check. Your own packages and files stay.
+Installing prints a plan of what is new and what is already present, then asks. It installs missing packages first, then plugins, then skill links and config files. Removing drops this bundle's ownership, prints a plan, and asks. Something is deleted only when no remaining bundle owns it and it was not yours. Packages are removed with `omarchy-pkg-drop` after that check. Plugins are removed with `omarchy-plugin-remove` after that check. Your own packages and files stay.
+
+When `introduction` is set, a successful install sends a notification. The headline is `Bundle <name> installed` and the body is `Click to see the introduction.` The click opens that file in a terminal. The file is shown as text. Install does not run it.
 
 ## Skills
 

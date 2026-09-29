@@ -33,9 +33,10 @@ while (( $# > 0 )); do
 Usage: omarchy bundle add <path|git-url|publisher/name[@version]> [--dry-run] [--yes]
 
 Copies a bundle into ~/.local/share/omarchy-bundles and records ownership
-in the bundle ledger. Installs missing packages and plugins. New plugins
+in the bundle ledger. Installs missing packages, then plugins. New plugins
 are enabled with --yes. Otherwise you are asked once whether to enable
-them. Does not run any file from the bundle.
+them. A bundle with an introduction sends a notification that opens it.
+Does not run any file from the bundle.
 USAGE
     exit 0
     ;;
@@ -63,6 +64,8 @@ source_label=""
 bundle_dir=""
 created_dest=0
 committed=0
+rollback_repo=()
+rollback_aur=()
 cleanup() {
   local link file plugin_id
   if (( committed == 0 && created_dest == 1 )) && [[ -f ${plan:-} ]]; then
@@ -79,6 +82,14 @@ cleanup() {
       done < <(jq -r '.[] | select(.added == true) | .id' "$resolved" 2>/dev/null || true)
     fi
     rm -rf -- "$dest"
+  fi
+  if (( committed == 0 )); then
+    if (( ${#rollback_aur[@]} > 0 )); then
+      omarchy-pkg-aur-drop "${rollback_aur[@]}" >/dev/null 2>&1 || true
+    fi
+    if (( ${#rollback_repo[@]} > 0 )); then
+      omarchy-pkg-drop "${rollback_repo[@]}" >/dev/null 2>&1 || true
+    fi
   fi
   rm -rf -- "$workdir"
 }
@@ -307,6 +318,14 @@ echo "Config:"
 jq -r 'if (.configs | length) == 0 then "  (none)" else .configs[] | "  \(if .action == "copy" then "+" else "=" end) \(.target)  (\(.note))" end' "$plan"
 echo
 echo "No conflicts with installed bundles."
+echo
+echo "Introduction:"
+introduction=$(jq -r 'if has("introduction") then .introduction else "" end' "$bundle_dir/bundle.json")
+if [[ -n $introduction ]]; then
+  echo "  $introduction  (notification after install)"
+else
+  echo "  (none)"
+fi
 
 if (( dry_run )); then
   echo
@@ -328,26 +347,20 @@ if (( new_plugins > 0 )); then
 fi
 
 sha=$(bundle_tree_sha256 "$bundle_dir")
+
+mapfile -t repo_install < <(jq -r '.packages[] | select(.action == "install" and .source != "aur") | .name' "$plan")
+mapfile -t aur_install < <(jq -r '.packages[] | select(.action == "install" and .source == "aur") | .name' "$plan")
+if (( ${#repo_install[@]} > 0 )); then
+  omarchy-pkg-add "${repo_install[@]}"
+  rollback_repo=("${repo_install[@]}")
+fi
+if (( ${#aur_install[@]} > 0 )); then
+  omarchy-pkg-aur-add "${aur_install[@]}"
+  rollback_aur=("${aur_install[@]}")
+fi
+
 bundle_copy_tree "$bundle_dir" "$dest"
 created_dest=1
-
-while IFS= read -r row; do
-  [[ -n $row ]] || continue
-  action=$(jq -r '.action' <<<"$row")
-  path=$(jq -r '.path' <<<"$row")
-  target=$(jq -r '.target' <<<"$row")
-  [[ $action == link ]] || continue
-  ln -s -- "$target" "$path"
-done < <(jq -c '.skills[]' "$plan")
-
-while IFS= read -r row; do
-  [[ -n $row ]] || continue
-  action=$(jq -r '.action' <<<"$row")
-  [[ $action == copy ]] || continue
-  source_rel=$(jq -r '.source' <<<"$row")
-  target=$(jq -r '.target' <<<"$row")
-  install -D -m 644 -- "$dest/$source_rel" "$target"
-done < <(jq -c '.configs[]' "$plan")
 
 resolved="$workdir/plugins.json"
 echo '[]' >"$resolved"
@@ -376,14 +389,23 @@ while IFS= read -r row; do
   mv -f -- "$resolved.next" "$resolved"
 done < <(jq -c '.plugins[]' "$plan")
 
-mapfile -t repo_install < <(jq -r '.packages[] | select(.action == "install" and .source != "aur") | .name' "$plan")
-mapfile -t aur_install < <(jq -r '.packages[] | select(.action == "install" and .source == "aur") | .name' "$plan")
-if (( ${#repo_install[@]} > 0 )); then
-  omarchy-pkg-add "${repo_install[@]}"
-fi
-if (( ${#aur_install[@]} > 0 )); then
-  omarchy-pkg-aur-add "${aur_install[@]}"
-fi
+while IFS= read -r row; do
+  [[ -n $row ]] || continue
+  action=$(jq -r '.action' <<<"$row")
+  path=$(jq -r '.path' <<<"$row")
+  target=$(jq -r '.target' <<<"$row")
+  [[ $action == link ]] || continue
+  ln -s -- "$target" "$path"
+done < <(jq -c '.skills[]' "$plan")
+
+while IFS= read -r row; do
+  [[ -n $row ]] || continue
+  action=$(jq -r '.action' <<<"$row")
+  [[ $action == copy ]] || continue
+  source_rel=$(jq -r '.source' <<<"$row")
+  target=$(jq -r '.target' <<<"$row")
+  install -D -m 644 -- "$dest/$source_rel" "$target"
+done < <(jq -c '.configs[]' "$plan")
 
 receipt=$(bundle_receipt_json "$source_label" "$version" "$sha" "$commit" "$name")
 updated=$(jq -c \
@@ -421,3 +443,10 @@ updated=$(jq -c \
 bundle_ledger_write "$updated"
 committed=1
 echo "Installed $id into $dest"
+if [[ -n $introduction ]]; then
+  if ! omarchy-notification-send -u normal -t 0 \
+    "Bundle $name installed" "Click to see the introduction." \
+    --exec omarchy-launch-tui omarchy-bundle-introduction -- "$id"; then
+    echo "Installed $id, but the introduction notification could not be sent." >&2
+  fi
+fi

@@ -215,7 +215,7 @@ pass "dry run changes nothing"
 
 # 4c. New plugins are enabled with --yes, and an interactive install can decline.
 home=$(new_home plugin-yes)
-write_bundle "$home/plug" plug-bundle "Plug" '[]'
+write_bundle "$home/plug" plug-bundle "Plug" '["samplepkg"]'
 jq '.plugins = ["https://example.test/gamemode-switcher.git"]' \
   "$home/plug/bundle.json" >"$home/plug/bundle.json.next"
 mv "$home/plug/bundle.json.next" "$home/plug/bundle.json"
@@ -245,8 +245,12 @@ output=$(
     PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
     "$ROOT/bin/omarchy-bundle-add" --yes "$home/plug"
 )
+calls_have "$home" "omarchy-pkg-add samplepkg" || fail "bundle add installs packages" "$(cat "$home/calls.log")"
 calls_have "$home" "omarchy-plugin-add --yes --enable -- https://example.test/gamemode-switcher.git" \
   || fail "bundle add --yes enables new plugins" "$(cat "$home/calls.log")"
+pkg_line=$(grep -n 'omarchy-pkg-add samplepkg' "$home/calls.log" | head -n 1 | cut -d: -f1)
+plugin_line=$(grep -n 'omarchy-plugin-add --yes --enable' "$home/calls.log" | head -n 1 | cut -d: -f1)
+(( pkg_line < plugin_line )) || fail "packages install before plugins" "$(cat "$home/calls.log")"
 grep -q 'New plugins are enabled.' <<<"$output" || fail "install with --yes says new plugins are enabled" "$output"
 pass "bundle add --yes enables new plugins"
 
@@ -297,6 +301,65 @@ else
   skip "script -qec unavailable; skipping the interactive plugin-enable prompt"
 fi
 
+# A plugin failure after the packages are installed removes those packages.
+home=$(new_home plugin-fail)
+write_bundle "$home/plug" plug-fail "Plug Fail" '["failpkg"]' '[]' '["failaur"]'
+jq '.plugins = ["https://example.test/gamemode-switcher.git"]' \
+  "$home/plug/bundle.json" >"$home/plug/bundle.json.next"
+mv "$home/plug/bundle.json.next" "$home/plug/bundle.json"
+if output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/plug" 2>&1); then
+  fail "a failing plugin still installed the bundle" "$output"
+fi
+calls_have "$home" "omarchy-pkg-add failpkg" || fail "repo packages were installed before the plugin failed" "$(cat "$home/calls.log")"
+calls_have "$home" "omarchy-pkg-aur-add failaur" || fail "AUR packages were installed before the plugin failed" "$(cat "$home/calls.log")"
+calls_have "$home" "omarchy-pkg-drop failpkg" || fail "repo packages are removed when a later step fails" "$(cat "$home/calls.log")"
+calls_have "$home" "omarchy-pkg-aur-drop failaur" || fail "AUR packages are removed when a later step fails" "$(cat "$home/calls.log")"
+if [[ -f $home/installed.list ]] && grep -qxF failpkg "$home/installed.list"; then
+  fail "the repo package stayed installed after the plugin failed" "$(cat "$home/installed.list")"
+fi
+[[ ! -e $home/.local/state/omarchy/bundles/ledger.json ]] || fail "a failed install wrote a ledger"
+[[ ! -e $home/.local/share/omarchy-bundles/plug-fail ]] || fail "a failed install left the bundle copy"
+pass "a plugin failure removes the packages installed in that run"
+
+# Introduction notification, and the command that opens it.
+home=$(new_home intro)
+write_bundle "$home/intro-bundle" intro-bundle "Intro Bundle" '[]'
+printf 'How to use Intro Bundle.\n' >"$home/intro-bundle/introduction.md"
+jq '.introduction = "introduction.md"' \
+  "$home/intro-bundle/bundle.json" >"$home/intro-bundle/bundle.json.next"
+mv "$home/intro-bundle/bundle.json.next" "$home/intro-bundle/bundle.json"
+mkdir -p "$home/bin"
+cat >"$home/bin/omarchy-notification-send" <<'EOF'
+#!/bin/bash
+printf 'omarchy-notification-send %s\n' "$*" >>"$HOME/calls.log"
+exit 0
+EOF
+chmod +x "$home/bin/omarchy-notification-send"
+output=$(
+  HOME="$home" \
+    XDG_DATA_HOME="$home/.local/share" \
+    XDG_STATE_HOME="$home/.local/state" \
+    XDG_CONFIG_HOME="$home/.config" \
+    PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+    "$ROOT/bin/omarchy-bundle-add" --dry-run "$home/intro-bundle"
+)
+grep -q 'introduction.md  (notification after install)' <<<"$output" \
+  || fail "dry run names the introduction" "$output"
+[[ ! -e $home/calls.log ]] || fail "dry run sent a notification" "$(cat "$home/calls.log" 2>/dev/null)"
+output=$(
+  HOME="$home" \
+    XDG_DATA_HOME="$home/.local/share" \
+    XDG_STATE_HOME="$home/.local/state" \
+    XDG_CONFIG_HOME="$home/.config" \
+    PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+    "$ROOT/bin/omarchy-bundle-add" --yes "$home/intro-bundle"
+)
+calls_have "$home" "omarchy-notification-send -u normal -t 0 Bundle Intro Bundle installed Click to see the introduction. --exec omarchy-launch-tui omarchy-bundle-introduction -- intro-bundle" \
+  || fail "install notifies with a click command for the introduction" "$(cat "$home/calls.log")"
+shown=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-introduction" -- intro-bundle)
+grep -q 'How to use Intro Bundle.' <<<"$shown" || fail "introduction command prints the file" "$shown"
+pass "an introduction notifies and opens as text"
+
 # 4b. An installed machine symlinks ~/.local/share/omarchy at the system tree.
 home=$(new_home share-link)
 system="$HOME_DIR/fake-usr-share-omarchy"
@@ -334,6 +397,19 @@ if output=$(run_bundle "$HOME_DIR" "$ROOT/bin/omarchy-bundle-validate" "$bad" 2>
   fail "validate accepted an unknown key" "$output"
 fi
 grep -q "unknown key 'hooks'" <<<"$output" || fail "validate names the unknown key" "$output"
+
+jq '.introduction = "../outside.txt"' "$ROOT/test/fixtures/bundles/gamer/bundle.json" >"$bad/bundle.json"
+if output=$(run_bundle "$HOME_DIR" "$ROOT/bin/omarchy-bundle-validate" "$bad" 2>&1); then
+  fail "validate accepted an introduction path outside the bundle" "$output"
+fi
+grep -q "introduction path must be a safe relative path" <<<"$output" \
+  || fail "validate names an unsafe introduction path" "$output"
+
+jq '.introduction = "missing.md"' "$ROOT/test/fixtures/bundles/gamer/bundle.json" >"$bad/bundle.json"
+if output=$(run_bundle "$HOME_DIR" "$ROOT/bin/omarchy-bundle-validate" "$bad" 2>&1); then
+  fail "validate accepted a missing introduction file" "$output"
+fi
+grep -q "introduction file not found" <<<"$output" || fail "validate names a missing introduction" "$output"
 pass "validate rejects a missing id, a missing version, and unknown keys"
 
 # 6 and 7 and 9. Project creation, no execution during install, receipt fields.
