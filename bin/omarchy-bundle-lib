@@ -232,7 +232,7 @@ bundle_validate() {
     [[ -n $field ]] || continue
     bundle_fail "unknown key '$field' in $manifest"
   done < <(jq -r '
-    (keys - ["schemaVersion","packageType","id","name","version","description","packages","aurPackages","plugins","skills","config","conflicts","project"])[]
+    (keys - ["schemaVersion","packageType","id","name","version","description","packages","aurPackages","plugins","skills","config","conflicts","project","introduction"])[]
   ' "$manifest")
 
   if jq -e 'has("packageType")' "$manifest" >/dev/null; then
@@ -327,6 +327,14 @@ bundle_validate() {
       jq -e '(.project.root | type) == "string" and (.project.root | length) > 0' "$manifest" >/dev/null \
         || bundle_fail "'project.root' must be a non-empty string"
     fi
+  fi
+
+  if jq -e 'has("introduction")' "$manifest" >/dev/null; then
+    jq -e '(.introduction | type) == "string" and (.introduction | length) > 0' "$manifest" >/dev/null \
+      || bundle_fail "'introduction' must be a non-empty string"
+    value=$(jq -r '.introduction' "$manifest")
+    bundle_safe_rel "$value" || bundle_fail "introduction path must be a safe relative path: '$value'"
+    [[ -f $dir/$value ]] || bundle_fail "introduction file not found: '$value'"
   fi
 
   link=$(find "$dir" -name .git -prune -o \( -type l -o -type p -o -type s -o -type b -o -type c \) -print -quit 2>/dev/null)
