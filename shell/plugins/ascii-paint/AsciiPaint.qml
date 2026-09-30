@@ -49,6 +49,7 @@ Item {
   property string textBuffer: ""
   property string confirmAction: ""
   property var pendingPayload: ({})
+  property string saveError: ""
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
@@ -82,6 +83,7 @@ Item {
     return (canvas ? canvas.rows : 0) * cellH
   }
   readonly property string statusText: {
+    if (saveError.length) return saveError
     var size = (canvas ? canvas.cols : 0) + "\u00d7" + (canvas ? canvas.rows : 0)
     var name = filePath.length ? filePath : "unsaved"
     return size + "  " + name + (dirty ? "  \u2022 modified" : "")
@@ -134,6 +136,7 @@ Item {
     root.typing = false
     root.textBase = null
     root.textBuffer = ""
+    root.saveError = ""
     root.canvasReady = false
     if (!root.filePath) {
       root.applyCanvas(PaintModel.createCanvas(80, 24), false)
@@ -239,6 +242,7 @@ Item {
   }
 
   function markDirty() {
+    root.saveError = ""
     root.dirty = true
     root.refresh()
   }
@@ -461,12 +465,34 @@ Item {
     root.saveTo(root.filePath)
   }
 
+  function savePrepScript() {
+    return [
+      "set -euo pipefail",
+      "dir=$(dirname -- \"$1\")",
+      "if ! mkdir -p -- \"$dir\"; then",
+      "  printf '%s\\n' 'Could not create the folder, so nothing was saved.'",
+      "  exit 1",
+      "fi",
+      "if [[ -f $1 ]]; then",
+      "  if ! cp -f -- \"$1\" \"$2\"; then",
+      "    printf '%s\\n' 'Could not back up the previous file, so it was left unchanged.'",
+      "    exit 1",
+      "  fi",
+      "fi",
+      "if ! touch -- \"$1\"; then",
+      "  printf '%s\\n' 'Could not update the file, so it was left unchanged.'",
+      "  exit 1",
+      "fi"
+    ].join("\n")
+  }
+
   function saveTo(path) {
     root.filePath = path
     root.writing = true
+    root.saveError = ""
     mkdirProc.command = [
       "bash", "-c",
-      "mkdir -p \"$(dirname -- \"$1\")\"; if [[ -f $1 ]]; then cp -f \"$1\" \"$2\"; fi; touch \"$1\"",
+      root.savePrepScript(),
       "omarchy-ascii-paint-save",
       path,
       PaintModel.backupPath(path)
@@ -474,7 +500,20 @@ Item {
     mkdirProc.running = true
   }
 
+  function failSave(detail) {
+    root.writing = false
+    var message = String(detail || "").trim()
+    if (!message.length) message = "The file was left unchanged."
+    root.saveError = message
+    Quickshell.execDetached([
+      root.omarchyPath + "/bin/omarchy-notification-send",
+      "Paint was not saved",
+      message
+    ])
+  }
+
   function finishWrite() {
+    root.saveError = ""
     artFile.path = root.filePath
     artFile.setText(PaintModel.serialize(root.canvas))
     root.dirty = false
@@ -530,9 +569,13 @@ Item {
 
   Process {
     id: mkdirProc
+    stdout: StdioCollector {
+      id: saveOut
+      waitForEnd: true
+    }
     onExited: function(exitCode) {
       if (exitCode === 0) root.finishWrite()
-      else root.writing = false
+      else root.failSave(saveOut.text)
     }
   }
 
@@ -549,6 +592,7 @@ Item {
       if (root.chooserSave) root.saveTo(path)
       else {
         root.filePath = path
+        root.saveError = ""
         root.writing = false
         artFile.path = ""
         Qt.callLater(function() {
@@ -1146,11 +1190,11 @@ Item {
             anchors.leftMargin: card.contentLeftInset
             anchors.rightMargin: card.contentRightInset
             text: root.statusText
-            color: root.foreground
-            opacity: 0.7
+            color: root.saveError.length ? Color.urgent : root.foreground
+            opacity: root.saveError.length ? 1 : 0.7
+            elide: root.saveError.length ? Text.ElideRight : Text.ElideMiddle
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
-            elide: Text.ElideMiddle
           }
       }
 

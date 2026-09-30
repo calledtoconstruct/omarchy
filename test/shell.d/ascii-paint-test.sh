@@ -381,6 +381,75 @@ PY
 pass "paint overlay maps keys and shows tooltips"
 grep -q 'backupPath' "$qml" || fail "paint overlay writes a .bak before save"
 pass "paint overlay writes a .bak before save"
+python3 - <<'PY' "$qml" || fail "a failed backup cancels the save and explains why"
+import os, pathlib, re, subprocess, sys, tempfile
+
+qml = pathlib.Path(sys.argv[1]).read_text()
+match = re.search(r"function savePrepScript\(\) \{([\s\S]*?)\n  \}", qml)
+if not match:
+    raise SystemExit("savePrepScript missing")
+array = match.group(1).split("].join", 1)[0]
+
+def unescape(raw):
+    out = []
+    i = 0
+    while i < len(raw):
+        if raw[i] == "\\" and i + 1 < len(raw):
+            code = raw[i + 1]
+            out.append({"n": "\n", "t": "\t", '"': '"', "\\": "\\"}.get(code, code))
+            i += 2
+            continue
+        out.append(raw[i])
+        i += 1
+    return "".join(out)
+
+script = "\n".join(unescape(part) for part in re.findall(r'"((?:\\.|[^"\\])*)"', array))
+if "set -euo pipefail" not in script or "cp -f --" not in script:
+    raise SystemExit("save script lost its failure stop")
+
+def run(path, backup):
+    return subprocess.run(
+        ["bash", "-c", script, "omarchy-ascii-paint-save", path, backup],
+        check=False, text=True, capture_output=True,
+    )
+
+with tempfile.TemporaryDirectory() as tmp:
+    spaced = os.path.join(tmp, "my art.txt")
+    pathlib.Path(spaced).write_text("before\n", encoding="utf-8")
+    ok = run(spaced, spaced + ".bak")
+    if ok.returncode != 0 or pathlib.Path(spaced + ".bak").read_text(encoding="utf-8") != "before\n":
+        sys.stderr.write(ok.stderr)
+        raise SystemExit("backup of a path with spaces failed")
+    if pathlib.Path(spaced).read_text(encoding="utf-8") != "before\n":
+        raise SystemExit("preparing the save changed the original")
+
+    blocked = os.path.join(tmp, "not-a-dir")
+    pathlib.Path(blocked).write_text("x", encoding="utf-8")
+    nested = os.path.join(blocked, "art.txt")
+    denied = run(nested, nested + ".bak")
+    if denied.returncode == 0 or "Could not create the folder, so nothing was saved." not in denied.stdout:
+        sys.stderr.write(denied.stdout + denied.stderr)
+        raise SystemExit("a folder that cannot be created still continued")
+
+    original = os.path.join(tmp, "kept.txt")
+    pathlib.Path(original).write_text("keep me\n", encoding="utf-8")
+    failed = run(original, "/dev/full")
+    if failed.returncode == 0 or "Could not back up the previous file, so it was left unchanged." not in failed.stdout:
+        sys.stderr.write(failed.stdout + failed.stderr)
+        raise SystemExit("a failed copy still exited 0")
+    if pathlib.Path(original).read_text(encoding="utf-8") != "keep me\n":
+        raise SystemExit("a failed copy changed the original")
+
+handler = qml.split("id: mkdirProc", 1)[1].split("Process {", 1)[0]
+if "exitCode === 0) root.finishWrite()" not in handler or "root.failSave(saveOut.text)" not in handler:
+    raise SystemExit("a non-zero save still writes the file")
+fail = qml.split("function failSave", 1)[1].split("function finishWrite", 1)[0]
+if "Paint was not saved" not in fail or "omarchy-notification-send" not in fail or "dirty = false" in fail:
+    raise SystemExit("the painter does not explain a cancelled save")
+if "if (saveError.length) return saveError" not in qml:
+    raise SystemExit("the status line hides the save error")
+PY
+pass "a failed backup cancels the save and explains why"
 
 menu="$ROOT/default/omarchy/omarchy-menu.jsonc"
 grep -q '"style.screensaver.paint"' "$menu" || fail "screensaver menu has a Paint entry"

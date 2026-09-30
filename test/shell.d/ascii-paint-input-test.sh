@@ -21,6 +21,7 @@ cp "$SHELL_TEST_DIR/fixtures/ascii-paint-input/shell.qml" "$work/config/shell.qm
 printf 'ab\ncd\n' > "$work/home/seeded.txt"
 printf 'o\n' > "$work/home/opened.txt"
 printf ' \n' > "$work/home/blank.txt"
+cp "$work/home/blank.txt" "$work/home/blank-before.txt"
 : > "$work/home/empty.txt"
 
 cat > "$work/omarchy/bin/omarchy-file-select" << EOF
@@ -77,7 +78,7 @@ pass "ascii paint pointer and keyboard suite"
 
 grep -q $'\xe2\x96\x98' "$work/home/blank.txt" || fail "save wrote the quadrant the pointer painted" "$(cat "$work/home/blank.txt")"
 pass "save wrote the quadrant the pointer painted"
-[[ -f $work/home/blank.txt.bak ]] || fail "save keeps the previous file as .bak"
+cmp -s "$work/home/blank-before.txt" "$work/home/blank.txt.bak" || fail "save keeps the previous text in the .bak" "$(od -An -tx1 "$work/home/blank.txt.bak")"
 pass "save keeps the previous file as .bak"
 grep -q 'force' "$work/home/preview.log" || fail "save with a screensaver preview launches the screensaver" "$(cat "$work/home/preview.log")"
 pass "save with a screensaver preview launches the screensaver"
