@@ -127,7 +127,10 @@ scala)
   ;;
 firebase)
   echo -e "Installing Firebase CLI...\n"
-  mise use --global firebase@latest
-  echo -e "\nYou can now run: firebase login"
+  if mise use --global firebase@latest; then
+    echo -e "\nYou can now run: firebase login"
+  else
+    exit 1
+  fi
   ;;
 esac

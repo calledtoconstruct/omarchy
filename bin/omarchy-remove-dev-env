@@ -147,8 +147,9 @@ scala)
   ;;
 firebase)
   echo -e "Removing Firebase CLI...\n"
-  mise uninstall firebase --all
-  mise rm -g firebase
+  if ! mise uninstall firebase --all || ! mise rm -g firebase; then
+    exit 1
+  fi
   ;;
 *)
   echo "Unknown environment: $1"
