@@ -222,17 +222,17 @@ function setShade(canvas, col, row, level) {
 }
 
 function setLiteral(canvas, col, row, ch) {
-  var s = String(ch || "")
-  if (!s || s === " ") writeCell(canvas, col, row, emptyCell())
-  else writeCell(canvas, col, row, { kind: "literal", ch: s.charAt(0) })
+  var chars = Array.from(String(ch || ""))
+  if (!chars.length || chars[0] === " ") writeCell(canvas, col, row, emptyCell())
+  else writeCell(canvas, col, row, { kind: "literal", ch: chars[0] })
 }
 
 function writeText(canvas, col, row, text) {
-  var s = String(text || "")
+  var chars = Array.from(String(text || ""))
   var i
-  for (i = 0; i < s.length; i++) {
+  for (i = 0; i < chars.length; i++) {
     if (!inBounds(canvas, col + i, row)) break
-    setLiteral(canvas, col + i, row, s.charAt(i))
+    setLiteral(canvas, col + i, row, chars[i])
   }
   return i
 }
@@ -285,6 +285,26 @@ function bresenham(c0, r0, c1, r1) {
   return points
 }
 
+// Box drawing only joins cells that share a side. A diagonal Bresenham step
+// becomes two orthogonal steps so the join is a corner instead of a blank cell.
+function stairPoints(points) {
+  var out = []
+  var i
+  var prev
+  var cur
+  if (!points || !points.length) return out
+  out.push(points[0])
+  for (i = 1; i < points.length; i++) {
+    prev = out[out.length - 1]
+    cur = points[i]
+    if (prev.c !== cur.c && prev.r !== cur.r)
+      out.push({ c: cur.c, r: prev.r })
+    if (prev.c !== cur.c || prev.r !== cur.r)
+      out.push(cur)
+  }
+  return out
+}
+
 function neighbor(canvas, col, row, dc, dr) {
   return cellAt(canvas, col + dc, row + dr)
 }
@@ -320,7 +340,7 @@ function connectLine(canvas, col, row, dc, dr, fromBit, toBit) {
 }
 
 function lineStroke(canvas, c0, r0, c1, r1, style) {
-  var points = bresenham(c0, r0, c1, r1)
+  var points = stairPoints(bresenham(c0, r0, c1, r1))
   var i
   var p
   var lineStyle = style === "double" ? "double" : "single"

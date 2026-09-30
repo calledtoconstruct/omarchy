@@ -50,6 +50,11 @@ Item {
   property string confirmAction: ""
   property var pendingPayload: ({})
   property string saveError: ""
+  property string loadingPath: ""
+  property string retainedPath: ""
+  property var retainedCanvas: null
+  property bool retainedReady: false
+  property bool retainedDirty: false
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
@@ -126,9 +131,29 @@ Item {
     root.dismiss()
   }
 
+  function rememberCanvas() {
+    root.retainedPath = root.filePath
+    root.retainedCanvas = root.canvas
+    root.retainedReady = root.canvasReady
+    root.retainedDirty = root.dirty
+  }
+
+  function beginFileLoad(path) {
+    root.loadingPath = path
+    root.writing = false
+    root.canvasReady = false
+    artFile.path = ""
+    Qt.callLater(function() {
+      if (root.loadingPath !== path) return
+      artFile.path = path
+      artFile.reload()
+    })
+  }
+
   function loadPayload(payload) {
+    var path = payload && payload.path ? String(payload.path) : ""
+    root.rememberCanvas()
     root.preview = payload && payload.preview ? String(payload.preview) : ""
-    root.filePath = payload && payload.path ? String(payload.path) : ""
     root.tool = "block"
     root.lastPaintTool = "block"
     root.dirty = false
@@ -138,16 +163,24 @@ Item {
     root.textBuffer = ""
     root.saveError = ""
     root.canvasReady = false
-    if (!root.filePath) {
+    if (!path) {
+      root.filePath = ""
+      root.loadingPath = ""
       root.applyCanvas(PaintModel.createCanvas(80, 24), false)
       return
     }
-    root.writing = false
-    artFile.path = ""
-    Qt.callLater(function() {
-      artFile.path = root.filePath
-      artFile.reload()
-    })
+    root.beginFileLoad(path)
+  }
+
+  function restoreRetained(message) {
+    root.loadingPath = ""
+    root.filePath = root.retainedPath || ""
+    if (root.retainedCanvas) root.canvas = root.retainedCanvas
+    root.canvasReady = !!root.retainedReady
+    root.dirty = !!root.retainedDirty
+    root.syncHistoryButtons()
+    root.refresh()
+    if (message) root.reportProblem("File was not opened", message)
   }
 
   function applyCanvas(next, isDirty) {
@@ -379,20 +412,26 @@ Item {
 
   function typeChar(ch) {
     if (!root.typing || !ch || ch === "\n" || ch === "\r") return
-    if (ch.charCodeAt(0) < 32) return
-    var hit = { col: root.textCol, row: root.textRow, lx: 0, ly: 0 }
-    if (!root.inCanvas(hit)) return
-    PaintModel.setLiteral(root.canvas, root.textCol, root.textRow, ch)
-    root.textBuffer += ch
-    root.textCol += 1
-    root.dirty = true
+    var chars = Array.from(String(ch))
+    var i
+    for (i = 0; i < chars.length; i++) {
+      if (chars[i].charCodeAt(0) < 32) continue
+      var hit = { col: root.textCol, row: root.textRow, lx: 0, ly: 0 }
+      if (!root.inCanvas(hit)) return
+      PaintModel.setLiteral(root.canvas, root.textCol, root.textRow, chars[i])
+      root.textBuffer += chars[i]
+      root.textCol += 1
+      root.dirty = true
+    }
     root.refresh()
   }
 
   function typeBackspace() {
     if (!root.typing || root.textCol <= root.textOrigin) return
+    var chars = Array.from(root.textBuffer)
+    chars.pop()
+    root.textBuffer = chars.join("")
     root.textCol -= 1
-    root.textBuffer = root.textBuffer.slice(0, -1)
     var ch = root.textBase ? PaintModel.glyphAt(root.textBase, root.textCol, root.textRow) : " "
     PaintModel.setLiteral(root.canvas, root.textCol, root.textRow, ch)
     root.dirty = true
@@ -458,6 +497,7 @@ Item {
 
   function save() {
     root.afterChromeClick()
+    if (root.loadingPath) return
     if (!root.filePath) {
       root.saveAs()
       return
@@ -471,17 +511,17 @@ Item {
       "dir=$(dirname -- \"$1\")",
       "if ! mkdir -p -- \"$dir\"; then",
       "  printf '%s\\n' 'Could not create the folder, so nothing was saved.'",
-      "  exit 1",
+      "  exit 2",
       "fi",
       "if [[ -f $1 ]]; then",
       "  if ! cp -f -- \"$1\" \"$2\"; then",
       "    printf '%s\\n' 'Could not back up the previous file, so it was left unchanged.'",
-      "    exit 1",
+      "    exit 3",
       "  fi",
       "fi",
       "if ! touch -- \"$1\"; then",
       "  printf '%s\\n' 'Could not update the file, so it was left unchanged.'",
-      "  exit 1",
+      "  exit 4",
       "fi"
     ].join("\n")
   }
@@ -500,23 +540,38 @@ Item {
     mkdirProc.running = true
   }
 
-  function failSave(detail) {
-    root.writing = false
+  function saveFailureMessage(exitCode) {
+    if (exitCode === 2) return "Could not create the folder, so nothing was saved."
+    if (exitCode === 3) return "Could not back up the previous file, so it was left unchanged."
+    if (exitCode === 4) return "Could not update the file, so it was left unchanged."
+    return "The file was left unchanged."
+  }
+
+  function reportProblem(headline, detail) {
     var message = String(detail || "").trim()
     if (!message.length) message = "The file was left unchanged."
     root.saveError = message
     Quickshell.execDetached([
       root.omarchyPath + "/bin/omarchy-notification-send",
-      "Paint was not saved",
+      headline,
       message
     ])
+  }
+
+  function failSave(detail) {
+    root.writing = false
+    root.reportProblem("Paint was not saved", detail)
   }
 
   function finishWrite() {
     root.saveError = ""
     artFile.path = root.filePath
     artFile.setText(PaintModel.serialize(root.canvas))
+  }
+
+  function commitSaved() {
     root.dirty = false
+    root.saveError = ""
     root.history = PaintModel.createHistory()
     PaintModel.checkpoint(root.history, root.canvas)
     root.syncHistoryButtons()
@@ -531,8 +586,23 @@ Item {
     chooserProc.running = true
   }
 
-  function openFile() { root.afterChromeClick(); root.chooseFile(false) }
-  function saveAs() { root.afterChromeClick(); root.chooseFile(true) }
+  function openFile() {
+    root.afterChromeClick()
+    if (root.loadingPath) return
+    if (root.hasUnsavedChanges) {
+      root.confirmAction = "open-file"
+      confirmDialog.message = "Discard unsaved paint?"
+      confirmDialog.opened = true
+      return
+    }
+    root.chooseFile(false)
+  }
+
+  function saveAs() {
+    root.afterChromeClick()
+    if (root.loadingPath) return
+    root.chooseFile(true)
+  }
 
   property bool chooserSave: false
 
@@ -549,11 +619,35 @@ Item {
     printErrors: false
     onLoaded: {
       if (root.writing) return
+      if (root.loadingPath) {
+        root.filePath = root.loadingPath
+        root.loadingPath = ""
+      }
       root.applyFile(text())
     }
-    onLoadFailed: {
+    onLoadFailed: function(error) {
       if (root.writing) return
+      var requested = root.loadingPath
+      if (error === FileViewError.FileNotFound && requested) {
+        root.filePath = requested
+        root.loadingPath = ""
+        root.applyCanvas(PaintModel.createCanvas(80, 24), false)
+        return
+      }
+      if (requested && root.retainedCanvas) {
+        root.restoreRetained("Could not read that file, so the current painting was kept.")
+        return
+      }
+      root.loadingPath = ""
       if (!root.canvasReady) root.applyCanvas(PaintModel.createCanvas(80, 24), false)
+    }
+    onSaved: {
+      if (!root.writing) return
+      root.commitSaved()
+    }
+    onSaveFailed: {
+      if (!root.writing) return
+      root.failSave("Could not write the file, so it was left unchanged.")
     }
   }
 
@@ -569,13 +663,9 @@ Item {
 
   Process {
     id: mkdirProc
-    stdout: StdioCollector {
-      id: saveOut
-      waitForEnd: true
-    }
     onExited: function(exitCode) {
       if (exitCode === 0) root.finishWrite()
-      else root.failSave(saveOut.text)
+      else root.failSave(root.saveFailureMessage(exitCode))
     }
   }
 
@@ -591,14 +681,14 @@ Item {
       if (!path) return
       if (root.chooserSave) root.saveTo(path)
       else {
-        root.filePath = path
+        root.rememberCanvas()
+        root.painting = false
+        root.typing = false
+        root.textBase = null
+        root.textBuffer = ""
         root.saveError = ""
-        root.writing = false
-        artFile.path = ""
-        Qt.callLater(function() {
-          artFile.path = path
-          artFile.reload()
-        })
+        root.dirty = false
+        root.beginFileLoad(path)
       }
     }
   }
@@ -1216,9 +1306,16 @@ Item {
         onCanceled: confirmDialog.opened = false
         onConfirmed: {
           confirmDialog.opened = false
+          if (root.confirmAction === "open-file") {
+            root.chooseFile(false)
+            return
+          }
+          if (root.confirmAction === "open") {
+            root.loadPayload(root.pendingPayload)
+            return
+          }
           root.dirty = false
-          if (root.confirmAction === "open") root.loadPayload(root.pendingPayload)
-          else root.dismiss()
+          root.dismiss()
         }
       }
     }
