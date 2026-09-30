@@ -5,8 +5,8 @@ import qs.Commons
 import qs.paint
 import "paint/PaintModel.js" as PaintModel
 
-// Drives the real painter overlay with Qt pointer and key events: the same
-// press, drag, wheel, and key delivery a focused window receives.
+// Drives the real painter overlay with Qt pointer events and the painter's key
+// handler. The suite sets PAINT_TEST_DIR so the overlay does not take the keyboard.
 ShellRoot {
   AsciiPaint { id: painter }
 
@@ -118,6 +118,22 @@ ShellRoot {
       painter.dirty = false
     }
 
+    function tapKey(key, modifiers) {
+      var text = ""
+      var code = key
+      if (typeof key === "string") {
+        text = key
+        code = key.charCodeAt(0)
+      }
+      painter.pressKey({
+        key: code,
+        text: text,
+        modifiers: modifiers || Qt.NoModifier,
+        accepted: false
+      })
+      wait(20)
+    }
+
     function run() {
       var blank = dir + "/blank.txt"
       var seeded = dir + "/seeded.txt"
@@ -169,30 +185,30 @@ ShellRoot {
       check(glyph(6, 1) !== " " && glyph(9, 1) !== " ", "a drag past the click slop paints the cells it crosses")
       console.log("RESULT ok block drag")
 
-      keyClick(Qt.Key_L)
+      tapKey(Qt.Key_L)
       wait(20)
       check(painter.tool === "line" && painter.linePaletteVisible, "L selects the line tool")
       clickCell(0, 3, 0.5, 0.5)
       check(glyph(0, 3) === "\u253c", "a line click with no drag is a crossing")
-      keyClick(Qt.Key_D)
+      tapKey(Qt.Key_D)
       wait(20)
       check(painter.lineStyle === "double", "D switches line style to double")
       dragCell(1, 3, 4, 3)
       check(glyph(1, 3) === "\u2550" || glyph(2, 3) === "\u2550", "a double-line drag commits a horizontal double stroke")
-      keyClick(Qt.Key_1)
+      tapKey(Qt.Key_1)
       wait(20)
       check(painter.lineStyle === "single", "1 returns a line to single style")
-      keyClick(Qt.Key_R)
+      tapKey(Qt.Key_R)
       wait(20)
       check(painter.tool === "rect", "R selects the rectangle tool")
       dragCell(0, 5, 3, 7)
       check(glyph(0, 5) === "\u250c" && glyph(3, 7) === "\u2518", "a rectangle drag commits the two opposite corners")
       console.log("RESULT ok lines and rectangles")
 
-      keyClick(Qt.Key_S)
+      tapKey(Qt.Key_S)
       wait(20)
       check(painter.tool === "shade" && painter.shadePaletteVisible, "S selects the shade tool")
-      keyClick(Qt.Key_2)
+      tapKey(Qt.Key_2)
       wait(20)
       check(painter.shadeLevel === 2, "2 selects the medium shade")
       clickCell(0, 9, 0.5, 0.5)
@@ -206,7 +222,7 @@ ShellRoot {
       mouseWheel(art(), painter.cellW, painter.cellH * 9, 0, 120)
       wait(20)
       check(painter.shadeLevel === 4, "the shade level stops at solid")
-      keyClick(Qt.Key_B)
+      tapKey(Qt.Key_B)
       wait(20)
       level = painter.shadeLevel
       mouseWheel(art(), painter.cellW, painter.cellH, 0, -120)
@@ -218,9 +234,9 @@ ShellRoot {
       openPayload({ path: seeded })
       check(painter.canvas.cols === 2 && painter.canvas.rows === 2, "an existing file opens at its own size")
       check(glyph(0, 0) === "a" && glyph(1, 1) === "d", "the opened file keeps its letters")
-      keyClick(Qt.Key_F)
+      tapKey(Qt.Key_F)
       wait(20)
-      keyClick(Qt.Key_1)
+      tapKey(Qt.Key_1)
       wait(20)
       clickCell(0, 0, 0.5, 0.5)
       check(glyph(0, 0) === "\u2591" && glyph(1, 1) === "d", "fill replaces the connected cell and stops at a different one")
@@ -228,25 +244,25 @@ ShellRoot {
 
       discard()
       openPayload({})
-      keyClick(Qt.Key_T)
+      tapKey(Qt.Key_T)
       wait(20)
       check(painter.tool === "text", "T selects the text tool")
       clickCell(2, 2, 0.5, 0.5)
       check(painter.typing, "a text click starts a caret")
-      keyClick("Z")
+      tapKey("Z")
       wait(20)
       check(glyph(2, 2) === "Z" || glyph(2, 2) === "z", "typing stamps the character into the caret cell")
-      keyClick(Qt.Key_Backspace)
+      tapKey(Qt.Key_Backspace)
       wait(20)
       check(glyph(2, 2) === " ", "backspace restores the cell from before the run")
-      keyClick("Q")
+      tapKey("Q")
       wait(20)
-      keyClick(Qt.Key_Escape)
+      tapKey(Qt.Key_Escape)
       wait(20)
       check(!painter.typing && glyph(2, 2) === " ", "escape cancels the text run")
       clickCell(2, 2, 0.5, 0.5)
-      keyClick("Q")
-      keyClick(Qt.Key_Return)
+      tapKey("Q")
+      tapKey(Qt.Key_Return)
       wait(20)
       check(!painter.typing && (glyph(2, 2) === "Q" || glyph(2, 2) === "q"), "enter commits the text run")
       clickCell(80, 2, 0.5, 0.5)
@@ -254,10 +270,10 @@ ShellRoot {
       console.log("RESULT ok text entry")
 
       var committed = glyph(2, 2)
-      keyClick(Qt.Key_Z, Qt.ControlModifier)
+      tapKey(Qt.Key_Z, Qt.ControlModifier)
       wait(30)
       check(glyph(2, 2) === " ", "ctrl+z undoes the committed text")
-      keyClick(Qt.Key_Z, Qt.ControlModifier | Qt.ShiftModifier)
+      tapKey(Qt.Key_Z, Qt.ControlModifier | Qt.ShiftModifier)
       wait(30)
       check(glyph(2, 2) === committed, "ctrl+shift+z redoes it")
       mouseClick(button("Undo"), button("Undo").width / 2, button("Undo").height / 2)
@@ -268,17 +284,17 @@ ShellRoot {
       check(glyph(2, 2) === committed, "the redo button restores it")
       console.log("RESULT ok undo and redo")
 
-      keyClick("+")
+      tapKey("+")
       wait(20)
       check(painter.zoom === 2, "+ zooms in")
-      keyClick("+")
-      keyClick("+")
+      tapKey("+")
+      tapKey("+")
       wait(20)
       check(painter.zoom === 3, "zoom stops at 3")
       mouseClick(button("1\u00d7"), button("1\u00d7").width / 2, button("1\u00d7").height / 2)
       wait(30)
       check(painter.zoom === 1, "the 1x button zooms back out")
-      keyClick("-")
+      tapKey("-")
       wait(20)
       check(painter.zoom === 1, "zoom does not go below 1")
       console.log("RESULT ok zoom")
@@ -304,7 +320,7 @@ ShellRoot {
       openPayload({ path: blank, preview: "screensaver" })
       clickCell(0, 0, 0.2, 0.2)
       var painted = glyph(0, 0)
-      keyClick(Qt.Key_S, Qt.ControlModifier)
+      tapKey(Qt.Key_S, Qt.ControlModifier)
       var spins = 0
       while (painter.dirty && spins < 40) {
         wait(25)
@@ -316,19 +332,32 @@ ShellRoot {
       wait(400)
 
       openPayload({})
-      keyClick(Qt.Key_L)
-      wait(20)
+      tapKey(Qt.Key_L)
+      clickCell(1, 1, 0.5, 0.5)
+      check(painter.hasUnsavedChanges, "a new stroke is unsaved")
+      tapKey(Qt.Key_Escape)
+      check(painter.opened && painter.tool === "line", "escape with unsaved paint asks instead of closing, and does not change tools")
+      tapKey(Qt.Key_B)
+      check(painter.tool === "line", "tool keys do nothing while the discard dialog is up")
+      tapKey(Qt.Key_K)
+      check(painter.opened && glyph(1, 1) !== " ", "keep leaves the paint in place")
+      tapKey(Qt.Key_Escape)
+      tapKey(Qt.Key_D)
+      check(!painter.opened, "discard closes the painter")
+      console.log("RESULT ok discard dialog")
+
+      openPayload({})
+      tapKey(Qt.Key_L)
       clickCell(1, 1, 0.5, 0.5)
       check(painter.hasUnsavedChanges, "paint is unsaved before open dirty=" + painter.dirty + " undo=" + painter.canUndo + " glyph=" + glyph(1, 1))
       mouseClick(button("Open"), button("Open").width / 2, button("Open").height / 2)
       wait(30)
       check(painter.filePath !== opened && glyph(1, 1) === "\u253c", "open asks before replacing unsaved paint")
-      keyClick(Qt.Key_K)
-      wait(20)
+      tapKey(Qt.Key_K)
       check(painter.hasUnsavedChanges && glyph(1, 1) === "\u253c", "keep leaves the unsaved paint in place")
       mouseClick(button("Open"), button("Open").width / 2, button("Open").height / 2)
       wait(20)
-      keyClick(Qt.Key_D)
+      tapKey(Qt.Key_D)
       spins = 0
       while ((painter.filePath !== opened || glyph(0, 0) !== "o") && spins < 40) {
         wait(25)
@@ -336,27 +365,6 @@ ShellRoot {
       }
       check(painter.filePath === opened && glyph(0, 0) === "o", "discard then open loads the chosen file")
       console.log("RESULT ok open asks first")
-
-      openPayload({})
-      keyClick(Qt.Key_L)
-      wait(20)
-      clickCell(1, 1, 0.5, 0.5)
-      check(painter.hasUnsavedChanges, "a new stroke is unsaved")
-      keyClick(Qt.Key_Escape)
-      wait(40)
-      check(painter.opened && painter.tool === "line", "escape with unsaved paint asks instead of closing, and does not change tools")
-      keyClick(Qt.Key_B)
-      wait(20)
-      check(painter.tool === "line", "tool keys do nothing while the discard dialog is up")
-      keyClick(Qt.Key_K)
-      wait(30)
-      check(painter.opened && glyph(1, 1) !== " ", "keep leaves the paint in place")
-      keyClick(Qt.Key_Escape)
-      wait(30)
-      keyClick(Qt.Key_D)
-      wait(30)
-      check(!painter.opened, "discard closes the painter")
-      console.log("RESULT ok discard dialog")
 
       openPayload({})
       mouseClick(button("Open"), button("Open").width / 2, button("Open").height / 2)
@@ -376,7 +384,7 @@ ShellRoot {
       wait(500)
       console.log("RESULT ok open and save as")
 
-      keyClick(Qt.Key_Escape)
+      tapKey(Qt.Key_Escape)
       wait(30)
       check(!painter.opened, "escape on a clean canvas closes")
       console.log("RESULT pass")

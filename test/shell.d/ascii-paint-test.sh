@@ -458,10 +458,22 @@ handler = qml.split("id: mkdirProc", 1)[1].split("Process {", 1)[0]
 if "exitCode === 0) root.finishWrite()" not in handler or "saveFailureMessage(exitCode)" not in handler:
     raise SystemExit("a non-zero save still writes the file")
 finish = qml.split("function finishWrite", 1)[1].split("function commitSaved", 1)[0]
-if "dirty = false" in finish or "setText" not in finish:
+if "dirty = false" in finish or "setText" not in finish or "savingText" not in finish:
     raise SystemExit("the modified flag clears before the file write finishes")
+commit = qml.split("function commitSaved", 1)[1].split("function chooseFile", 1)[0]
+if commit.find("savingText") == -1 or commit.find("dirty = false") < commit.find("savingText"):
+    raise SystemExit("a save clears strokes made while the write was finishing")
 if "onSaveFailed" not in qml or "function commitSaved" not in qml:
     raise SystemExit("a failed file write still looks saved")
+blank = qml.split("if (!path)", 1)[1].split("root.beginFileLoad", 1)[0]
+if 'artFile.path = ""' not in blank:
+    raise SystemExit("a blank open leaves a file read running")
+remember = qml.split("function rememberCanvas", 1)[1].split("function beginFileLoad", 1)[0]
+if "retainedCanvas" not in remember or "!root.canvasReady" not in remember:
+    raise SystemExit("a second open stores a canvas that is not ready")
+loaded = qml.split("onLoaded:", 1)[1].split("onLoadFailed:", 1)[0]
+if "!root.loadingPath" not in loaded:
+    raise SystemExit("a finished read can replace a canvas that no longer wants it")
 if 'confirmAction = "open-file"' not in qml or "Could not read that file, so the current painting was kept." not in qml:
     raise SystemExit("open can still discard or retarget unsaved paint")
 if "if (saveError.length) return saveError" not in qml:
