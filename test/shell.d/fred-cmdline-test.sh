@@ -109,3 +109,26 @@ PATH="$stub_bin:$PATH" TEST_LOG="$calls" bash -euo pipefail "$custom_migration" 
 [[ -f $custom ]] || fail "migration leaves an edited drop-in alone"
 [[ ! -s $calls ]] || fail "an edited drop-in does not trigger a rebuild" "$(cat "$calls")"
 pass "migration leaves an edited fred drop-in alone"
+
+write_shipped_drop_in
+rm -f "$rebuild_needed" "$limine_mkinitcpio"
+: >"$calls"
+missing_status=0
+PATH="$stub_bin:$PATH" TEST_LOG="$calls" bash -euo pipefail "$migration" >/dev/null 2>&1 || missing_status=$?
+[[ $missing_status -ne 0 ]] || fail "a missing limine-mkinitcpio does not count as a finished fred repair"
+[[ ! -e $drop_in ]] || fail "migration still removes the shipped drop-in when the rebuild cannot run"
+[[ -e $rebuild_needed ]] || fail "a skipped rebuild keeps the pending marker so a later update retries"
+! grep -q 'limine-mkinitcpio' "$calls" || fail "a missing limine-mkinitcpio is not invoked"
+pass "migration stays pending when limine-mkinitcpio is unavailable"
+
+cat >"$limine_mkinitcpio" <<'SH'
+#!/bin/bash
+echo 'limine-mkinitcpio' >>"$TEST_LOG"
+SH
+chmod +x "$limine_mkinitcpio"
+: >"$calls"
+run_migration
+grep -Fxq 'limine-mkinitcpio' "$calls" || fail "a later run rebuilds once limine-mkinitcpio is available"
+[[ ! -e $rebuild_needed ]] || fail "a later rebuild clears the pending marker"
+[[ ! -e $drop_in ]] || fail "the shipped drop-in stays removed after the delayed rebuild"
+pass "migration retries the fred rebuild after limine-mkinitcpio returns"

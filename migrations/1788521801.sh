@@ -19,11 +19,16 @@ as_root() {
 }
 
 finish_pending_rebuild() {
-  if [[ -x $limine_mkinitcpio ]]; then
-    if ! as_root "$limine_mkinitcpio"; then
-      echo "Could not rebuild the boot image after removing fred=on. Ask an administrator to run omarchy-migrate." >&2
-      exit 1
-    fi
+  # omarchy-migrate records a zero exit and will not run this file again.
+  # Leaving the rebuild marker in place is not a retry unless this stays pending.
+  if [[ ! -x $limine_mkinitcpio ]]; then
+    echo "limine-mkinitcpio is not available to rebuild the boot image after removing fred=on. The repair stays pending." >&2
+    exit 1
+  fi
+
+  if ! as_root "$limine_mkinitcpio"; then
+    echo "Could not rebuild the boot image after removing fred=on. Ask an administrator to run omarchy-migrate." >&2
+    exit 1
   fi
 
   if ! as_root "$rm_command" -f -- "$rebuild_needed"; then
