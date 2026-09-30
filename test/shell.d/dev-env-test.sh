@@ -33,6 +33,28 @@ grep -Fxq 'mise uninstall firebase --all' "$log" || fail "firebase removal unins
 grep -Fxq 'mise rm -g firebase' "$log" || fail "firebase removal clears the global version" "$(cat "$log")"
 pass "firebase removal uninstalls the mise tool"
 
+cat >"$stub_dir/mise" <<'STUB'
+#!/bin/bash
+printf 'mise %s\n' "$*" >>"$OMARCHY_DEV_ENV_LOG"
+exit 1
+STUB
+
+: >"$log"
+install_output=$(PATH="$stub_dir:$PATH" OMARCHY_DEV_ENV_LOG="$log" "$ROOT/bin/omarchy-install-dev-env" firebase 2>&1) &&
+  fail "failed firebase install exits non-zero" || true
+[[ $install_output != *"You can now run: firebase login"* ]] ||
+  fail "failed firebase install does not print success" "$install_output"
+grep -Fxq 'mise use --global firebase@latest' "$log" || fail "failed firebase install still calls mise" "$(cat "$log")"
+pass "failed firebase install does not report success"
+
+: >"$log"
+remove_output=$(PATH="$stub_dir:$PATH" OMARCHY_DEV_ENV_LOG="$log" "$ROOT/bin/omarchy-remove-dev-env" firebase 2>&1) &&
+  fail "failed firebase removal exits non-zero" || true
+[[ $remove_output != *"Done!"* ]] ||
+  fail "failed firebase removal does not print success" "$remove_output"
+grep -Fxq 'mise uninstall firebase --all' "$log" || fail "failed firebase removal still calls mise" "$(cat "$log")"
+pass "failed firebase removal does not report success"
+
 run_node_test <<'JS'
 const fs = require('fs')
 const menu = requireFromRoot('shell/plugins/menu/MenuModel.js')
