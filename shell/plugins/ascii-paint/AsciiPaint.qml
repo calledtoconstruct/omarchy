@@ -162,7 +162,9 @@ Item {
       root.applyCanvas(PaintModel.parse(text), false)
       return
     }
-    if (!root.filePath) root.applyCanvas(PaintModel.createCanvas(80, 24), false)
+    // A zero-length file loads successfully, so this is the only place that
+    // can give it a canvas. filePath is already set by then.
+    root.applyCanvas(PaintModel.createCanvas(80, 24), false)
   }
 
   function strokeKind() {
