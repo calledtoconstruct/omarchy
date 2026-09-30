@@ -38,6 +38,9 @@ SH
 cat >"$mock_bin/gdbus" <<'SH'
 #!/bin/bash
 
+# Real gdbus exits at once without --dest, and then nothing ever locks.
+[[ $* == "monitor --system --dest org.freedesktop.login1 --object-path /org/freedesktop/login1" ]] || exit 1
+
 echo "$$" >"$PRODUCER_PID_FILE"
 printf '/org/freedesktop/login1: org.freedesktop.login1.Manager.PrepareForSleep (true,)\n'
 exec sleep 30
