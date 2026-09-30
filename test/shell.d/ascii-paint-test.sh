@@ -172,6 +172,13 @@ paint.writeText(typed, 1, 0, 'Hi')
 assertEqual(glyph(typed, 1, 0) + glyph(typed, 2, 0) + glyph(typed, 3, 0), 'Hi ', 'writeText stamps literals from a cell')
 paint.writeText(typed, 3, 0, 'xyz')
 assertEqual(glyph(typed, 3, 0), 'x', 'writeText stops at the canvas edge')
+const emoji = String.fromCodePoint(0x1F642)
+const emojiCanvas = paint.createCanvas(2, 1)
+assertEqual(paint.writeText(emojiCanvas, 0, 0, emoji), 1, 'an emoji occupies one cell')
+assertEqual(glyph(emojiCanvas, 0, 0), emoji, 'a typed emoji stays one character')
+assertEqual(glyph(emojiCanvas, 1, 0), ' ', 'the emoji does not spill into the next cell')
+const emojiRound = paint.parse(paint.serialize(emojiCanvas))
+assertEqual(glyph(emojiRound, 0, 0), emoji, 'an emoji round-trips through the file')
 
 const padded = paint.parse('x  \n')
 assertEqual(paint.serialize(padded), 'x\n', 'serialize strips trailing spaces')
@@ -231,6 +238,13 @@ assertEqual(glyph(preview, 0, 0) + glyph(preview, 1, 0) + glyph(preview, 2, 0), 
 assertEqual(glyph(baseLine, 1, 0), ' ', 'a line preview does not mutate the committed canvas')
 const committed = paint.withStroke(baseLine, 'line', 0, 0, 2, 0, 'single')
 assertEqual(paint.serialize(committed), paint.serialize(preview), 'committing a line matches the last preview')
+const diagonal = paint.withStroke(paint.createCanvas(3, 3), 'line', 0, 0, 2, 2, 'single')
+assertEqual(glyph(diagonal, 0, 0), '\u2500', 'a diagonal starts with a horizontal step')
+assertEqual(glyph(diagonal, 1, 0), '\u2510', 'a diagonal step turns down on a corner')
+assertEqual(glyph(diagonal, 1, 1), '\u2514', 'the next diagonal step turns across on a corner')
+assertEqual(glyph(diagonal, 2, 1), '\u2510', 'the following diagonal step turns down again')
+assertEqual(glyph(diagonal, 2, 2), '\u2502', 'a diagonal ends on the vertical step')
+assertEqual(glyph(diagonal, 2, 0), ' ', 'the unused side of a stair step stays blank')
 
 const baseBox = paint.createCanvas(3, 3)
 const boxPreview = paint.withStroke(baseBox, 'rect', 0, 0, 2, 2, 'single')
@@ -427,25 +441,29 @@ with tempfile.TemporaryDirectory() as tmp:
     pathlib.Path(blocked).write_text("x", encoding="utf-8")
     nested = os.path.join(blocked, "art.txt")
     denied = run(nested, nested + ".bak")
-    if denied.returncode == 0 or "Could not create the folder, so nothing was saved." not in denied.stdout:
+    if denied.returncode != 2 or "Could not create the folder, so nothing was saved." not in denied.stdout:
         sys.stderr.write(denied.stdout + denied.stderr)
         raise SystemExit("a folder that cannot be created still continued")
 
     original = os.path.join(tmp, "kept.txt")
     pathlib.Path(original).write_text("keep me\n", encoding="utf-8")
     failed = run(original, "/dev/full")
-    if failed.returncode == 0 or "Could not back up the previous file, so it was left unchanged." not in failed.stdout:
+    if failed.returncode != 3 or "Could not back up the previous file, so it was left unchanged." not in failed.stdout:
         sys.stderr.write(failed.stdout + failed.stderr)
         raise SystemExit("a failed copy still exited 0")
     if pathlib.Path(original).read_text(encoding="utf-8") != "keep me\n":
         raise SystemExit("a failed copy changed the original")
 
 handler = qml.split("id: mkdirProc", 1)[1].split("Process {", 1)[0]
-if "exitCode === 0) root.finishWrite()" not in handler or "root.failSave(saveOut.text)" not in handler:
+if "exitCode === 0) root.finishWrite()" not in handler or "saveFailureMessage(exitCode)" not in handler:
     raise SystemExit("a non-zero save still writes the file")
-fail = qml.split("function failSave", 1)[1].split("function finishWrite", 1)[0]
-if "Paint was not saved" not in fail or "omarchy-notification-send" not in fail or "dirty = false" in fail:
-    raise SystemExit("the painter does not explain a cancelled save")
+finish = qml.split("function finishWrite", 1)[1].split("function commitSaved", 1)[0]
+if "dirty = false" in finish or "setText" not in finish:
+    raise SystemExit("the modified flag clears before the file write finishes")
+if "onSaveFailed" not in qml or "function commitSaved" not in qml:
+    raise SystemExit("a failed file write still looks saved")
+if 'confirmAction = "open-file"' not in qml or "Could not read that file, so the current painting was kept." not in qml:
+    raise SystemExit("open can still discard or retarget unsaved paint")
 if "if (saveError.length) return saveError" not in qml:
     raise SystemExit("the status line hides the save error")
 PY

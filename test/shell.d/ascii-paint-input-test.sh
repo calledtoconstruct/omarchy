@@ -68,6 +68,7 @@ expected=(
   "RESULT ok canvas edges"
   "RESULT ok save "
   "RESULT ok discard dialog"
+  "RESULT ok open asks first"
   "RESULT ok open and save as"
   "RESULT pass"
 )

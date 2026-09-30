@@ -319,6 +319,28 @@ ShellRoot {
       keyClick(Qt.Key_L)
       wait(20)
       clickCell(1, 1, 0.5, 0.5)
+      check(painter.hasUnsavedChanges, "paint is unsaved before open dirty=" + painter.dirty + " undo=" + painter.canUndo + " glyph=" + glyph(1, 1))
+      mouseClick(button("Open"), button("Open").width / 2, button("Open").height / 2)
+      wait(30)
+      check(painter.filePath !== opened && glyph(1, 1) === "\u253c", "open asks before replacing unsaved paint")
+      keyClick(Qt.Key_K)
+      wait(20)
+      check(painter.hasUnsavedChanges && glyph(1, 1) === "\u253c", "keep leaves the unsaved paint in place")
+      mouseClick(button("Open"), button("Open").width / 2, button("Open").height / 2)
+      wait(20)
+      keyClick(Qt.Key_D)
+      spins = 0
+      while ((painter.filePath !== opened || glyph(0, 0) !== "o") && spins < 40) {
+        wait(25)
+        spins++
+      }
+      check(painter.filePath === opened && glyph(0, 0) === "o", "discard then open loads the chosen file")
+      console.log("RESULT ok open asks first")
+
+      openPayload({})
+      keyClick(Qt.Key_L)
+      wait(20)
+      clickCell(1, 1, 0.5, 0.5)
       check(painter.hasUnsavedChanges, "a new stroke is unsaved")
       keyClick(Qt.Key_Escape)
       wait(40)
