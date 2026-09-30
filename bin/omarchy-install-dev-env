@@ -23,6 +23,18 @@ install_node() {
   mise use --global node
 }
 
+install_haskell_step() {
+  local label="$1"
+  shift
+
+  if "$@"; then
+    return 0
+  else
+    echo "Failed to install ${label}." >&2
+    return 1
+  fi
+}
+
 case "$1" in
 ruby)
   echo -e "Installing Ruby on Rails...\n"
@@ -128,11 +140,15 @@ scala)
 haskell)
   echo -e "Installing Haskell...\n"
   # The GHCup plugin compares HLS versions with bc.
-  omarchy-pkg-add bc
-  mise plugins install hls https://github.com/mise-plugins/mise-ghcup.git
-  mise use --global ghc@latest
-  mise use --global cabal@latest
-  mise use --global hls@latest
-  echo -e "\nYou can now run: cabal init --interactive"
+  if install_haskell_step bc omarchy-pkg-add bc \
+    && install_haskell_step "the HLS plugin" mise plugins install hls https://github.com/mise-plugins/mise-ghcup.git \
+    && install_haskell_step GHC mise use --global ghc@latest \
+    && install_haskell_step Cabal mise use --global cabal@latest \
+    && install_haskell_step HLS mise use --global hls@latest
+  then
+    echo -e "\nYou can now run: cabal init --interactive"
+  else
+    exit 1
+  fi
   ;;
 esac

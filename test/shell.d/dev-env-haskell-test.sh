@@ -19,6 +19,9 @@ trap 'rm -rf "$stub_dir"' EXIT
 cat >"$stub_dir/mise" <<'STUB'
 #!/bin/bash
 printf 'mise %s\n' "$*" >>"$OMARCHY_DEV_ENV_LOG"
+if [[ -n ${OMARCHY_DEV_ENV_FAIL:-} && "$*" == *"$OMARCHY_DEV_ENV_FAIL"* ]]; then
+  exit 1
+fi
 STUB
 cat >"$stub_dir/omarchy-pkg-add" <<'STUB'
 #!/bin/bash
@@ -34,6 +37,19 @@ grep -Fxq 'mise use --global ghc@latest' "$log" || fail "haskell install uses mi
 grep -Fxq 'mise use --global cabal@latest' "$log" || fail "haskell install uses mise for cabal" "$(cat "$log")"
 grep -Fxq 'mise use --global hls@latest' "$log" || fail "haskell install uses mise for HLS" "$(cat "$log")"
 pass "haskell install goes through mise"
+
+: >"$log"
+if PATH="$stub_dir:$PATH" OMARCHY_DEV_ENV_LOG="$log" OMARCHY_DEV_ENV_FAIL='cabal@latest' "$ROOT/bin/omarchy-install-dev-env" haskell >"$stub_dir/out" 2>&1; then
+  fail "haskell install fails when Cabal does not install" "$(cat "$stub_dir/out")"
+fi
+output=$(cat "$stub_dir/out")
+[[ $output == *"Failed to install Cabal."* ]] || fail "haskell install reports the Cabal failure" "$output"
+[[ $output != *"You can now run"* ]] || fail "haskell install does not say it is ready after Cabal fails" "$output"
+grep -Fxq 'mise use --global ghc@latest' "$log" || fail "haskell install reached GHC before Cabal failed" "$(cat "$log")"
+if grep -Fxq 'mise use --global hls@latest' "$log"; then
+  fail "haskell install stops after Cabal fails" "$(cat "$log")"
+fi
+pass "haskell install stops when a tool fails"
 
 : >"$log"
 PATH="$stub_dir:$PATH" OMARCHY_DEV_ENV_LOG="$log" "$ROOT/bin/omarchy-remove-dev-env" haskell >/dev/null
@@ -59,12 +75,13 @@ const install = byId['install.development.haskell']
 assert(install, 'menu includes Install > Development > Haskell')
 assertEqual(install.label, 'Haskell', 'Haskell install row is labeled Haskell')
 assertEqual(install.icon, '', 'Haskell install row uses the Nerd Font Haskell glyph')
-assertEqual(install.disabled, '[[ -d $HOME/.local/share/mise/installs/ghc ]]', 'Haskell install row dims once GHC is installed')
+const installed = '[[ -d $HOME/.local/share/mise/installs/ghc && -d $HOME/.local/share/mise/installs/cabal && -d $HOME/.local/share/mise/installs/hls ]]'
+assertEqual(install.disabled, installed, 'Haskell install row dims once GHC, Cabal, and HLS are installed')
 assert(!install.when, 'Haskell install row stays in the catalog after install')
 assert(install.action.includes("omarchy-install-dev-env haskell"), 'Haskell install row runs omarchy-install-dev-env haskell')
 
 const remove = byId['remove.development.haskell']
 assert(remove, 'menu includes Remove > Development > Haskell')
-assertEqual(remove.when, '[[ -d $HOME/.local/share/mise/installs/ghc ]]', 'Haskell remove row is hidden until GHC is installed')
+assertEqual(remove.when, installed, 'Haskell remove row stays hidden until GHC, Cabal, and HLS are installed')
 assert(remove.action.includes("omarchy-remove-dev-env haskell"), 'Haskell remove row runs omarchy-remove-dev-env haskell')
 JS
