@@ -21,6 +21,7 @@ cp "$SHELL_TEST_DIR/fixtures/ascii-paint-input/shell.qml" "$work/config/shell.qm
 printf 'ab\ncd\n' > "$work/home/seeded.txt"
 printf 'o\n' > "$work/home/opened.txt"
 printf ' \n' > "$work/home/blank.txt"
+: > "$work/home/empty.txt"
 
 cat > "$work/omarchy/bin/omarchy-file-select" << EOF
 #!/bin/bash
@@ -54,6 +55,7 @@ fi
 
 expected=(
   "RESULT ok blank canvas and disabled history"
+  "RESULT ok empty file"
   "RESULT ok block clicks, erase, and ignored pointers"
   "RESULT ok block drag"
   "RESULT ok lines and rectangles"

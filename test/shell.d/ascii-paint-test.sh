@@ -303,6 +303,28 @@ grep -q 'applyStamp' "$qml" || fail "stamps go through applyStamp"
 grep -q 'strokeIntent' "$qml" || fail "a stroke keeps the intent from press through release"
 grep -q 'function open(payloadJson)' "$qml" || fail "ascii-paint overlay implements open()"
 grep -q 'function close()' "$qml" || fail "ascii-paint overlay implements close()"
+python3 - <<'PY' "$qml" || fail "an existing empty file still gets a blank canvas"
+import pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text()
+m = re.search(r"function applyFile\(text\) \{", text)
+if not m:
+    raise SystemExit(1)
+i = m.end() - 1
+depth = 0
+body = ""
+for j in range(i, len(text)):
+    if text[j] == "{":
+        depth += 1
+    elif text[j] == "}":
+        depth -= 1
+        if depth == 0:
+            body = text[i:j + 1]
+            break
+if "createCanvas(80, 24)" not in body:
+    raise SystemExit(1)
+if re.search(r"if\s*\(\s*!root\.filePath\s*\)", body):
+    raise SystemExit(1)
+PY
 pass "ascii-paint overlay implements open and close"
 grep -q 'Qt.Key_1' "$qml" || fail "paint overlay maps number keys to shades"
 grep -q 'Block (B)' "$qml" || fail "tool buttons keep their names and shortcuts"
