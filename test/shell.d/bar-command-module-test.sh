@@ -11,6 +11,8 @@ if grep -q 'outputText = data.text ||' "$bar"; then
 fi
 grep -Fq 'data.text !== undefined && data.text !== null' "$bar" ||
   fail "command modules treat an explicit JSON text field as provided"
+grep -Fq '} else if (Util.isPlainObject(data)) {' "$bar" ||
+  fail "command modules show JSON that is not an object, like an array, as plain text"
 grep -Fq 'jsonProvidedText = true' "$bar" ||
   fail "command modules remember when JSON supplied a text field"
 grep -Fq 'text: jsonProvidedText ? outputText : (outputText || String(setting("text", "")))' "$bar" ||

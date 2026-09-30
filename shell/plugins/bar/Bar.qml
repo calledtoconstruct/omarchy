@@ -2031,10 +2031,10 @@ Item {
       var data = Util.parseModuleJson(raw)
       var klass = data.class || data.alt || ""
 
-      if (data && typeof data === "object" && data.text !== undefined && data.text !== null) {
+      if (Util.isPlainObject(data) && data.text !== undefined && data.text !== null) {
         outputText = String(data.text)
         jsonProvidedText = true
-      } else if (data && typeof data === "object") {
+      } else if (Util.isPlainObject(data)) {
         outputText = ""
         jsonProvidedText = false
       } else {
