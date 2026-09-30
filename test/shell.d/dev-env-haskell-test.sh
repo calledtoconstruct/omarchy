@@ -82,6 +82,7 @@ assert(install.action.includes("omarchy-install-dev-env haskell"), 'Haskell inst
 
 const remove = byId['remove.development.haskell']
 assert(remove, 'menu includes Remove > Development > Haskell')
-assertEqual(remove.when, installed, 'Haskell remove row stays hidden until GHC, Cabal, and HLS are installed')
+const partial = '[[ -d $HOME/.local/share/mise/installs/ghc || -d $HOME/.local/share/mise/installs/cabal || -d $HOME/.local/share/mise/installs/hls ]]'
+assertEqual(remove.when, partial, 'Haskell remove row appears when any of GHC, Cabal, or HLS is installed')
 assert(remove.action.includes("omarchy-remove-dev-env haskell"), 'Haskell remove row runs omarchy-remove-dev-env haskell')
 JS
