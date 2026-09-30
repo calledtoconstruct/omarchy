@@ -25,6 +25,11 @@ Item {
   property bool fingerprintConfigured: false
   property int fingerprintRetryAttempt: 0
   property string fingerprintLastMessage: ""
+  // Set when a conversation ends without ever offering a scan. The next
+  // place-your-finger prompt is recovery and clears the backoff; an ordinary
+  // prompt while this is false must not, or every rejected scan stays at 250ms.
+  property bool fingerprintReaderDown: false
+  property bool fingerprintPromptSeen: false
   property bool laptopClosed: false
   property bool laptopClosedKnown: false
   property bool previewVisible: false
@@ -179,6 +184,8 @@ Item {
     fingerprintAuthenticating = false
     fingerprintRetryAttempt = 0
     fingerprintLastMessage = ""
+    fingerprintReaderDown = false
+    fingerprintPromptSeen = false
     fingerprintRetryTimer.stop()
     if (passwordPam.active) passwordPam.abort()
     if (fingerprintPam.active) fingerprintPam.abort()
@@ -311,9 +318,18 @@ Item {
     if (fingerprintBlockedByLid()) return
     if (fingerprintPam.active || fingerprintAuthenticating) return
 
+    fingerprintPromptSeen = false
     fingerprintAuthenticating = true
     if (!fingerprintPam.start()) {
       fingerprintAuthenticating = false
+      var ended = FingerprintRetry.applyConversationEnd(
+        fingerprintRetryAttempt,
+        fingerprintReaderDown,
+        false,
+        false
+      )
+      fingerprintReaderDown = ended.readerDown
+      fingerprintPromptSeen = ended.promptSeen
       scheduleFingerprintRetry()
     }
   }
@@ -327,9 +343,17 @@ Item {
       return
     }
 
-    scheduleFingerprintRetry(
-      result === PamResult.Failed && FingerprintRetry.isIdleTimeout(fingerprintLastMessage)
+    var idle = result === PamResult.Failed && FingerprintRetry.isIdleTimeout(fingerprintLastMessage)
+    var ended = FingerprintRetry.applyConversationEnd(
+      fingerprintRetryAttempt,
+      fingerprintReaderDown,
+      fingerprintPromptSeen,
+      idle
     )
+    fingerprintRetryAttempt = ended.retryAttempt
+    fingerprintReaderDown = ended.readerDown
+    fingerprintPromptSeen = ended.promptSeen
+    scheduleFingerprintRetry(idle)
   }
 
   WlSessionLock {
@@ -466,10 +490,17 @@ Item {
     }
 
     onPamMessage: {
-      root.fingerprintLastMessage = String(fingerprintPam.message || "")
-      if (!fingerprintPam.messageIsError && fingerprintPam.message) {
-        root.fingerprintRetryAttempt = 0
-      }
+      var next = FingerprintRetry.applyPamMessage(
+        root.fingerprintRetryAttempt,
+        root.fingerprintReaderDown,
+        root.fingerprintPromptSeen,
+        fingerprintPam.message,
+        fingerprintPam.messageIsError
+      )
+      root.fingerprintLastMessage = next.lastMessage
+      root.fingerprintRetryAttempt = next.retryAttempt
+      root.fingerprintReaderDown = next.readerDown
+      root.fingerprintPromptSeen = next.promptSeen
     }
   }
 

@@ -23,6 +23,42 @@ assert(retry.isIdleTimeout('verification timed out.'), 'idle timeout match is ca
 assert(!retry.isIdleTimeout('Failed to match fingerprint'), 'a rejected print is not an idle timeout')
 assert(!retry.isIdleTimeout(''), 'an empty PAM message is not an idle timeout')
 
+assert(
+  retry.isRecoveryPrompt('Place your finger on the fingerprint reader', false),
+  'a place-your-finger info message can show that a down reader recovered'
+)
+assert(!retry.isRecoveryPrompt('Place your finger on the fingerprint reader', true), 'an error-styled prompt is not recovery')
+assert(!retry.isRecoveryPrompt('Verification timed out', false), 'an idle timeout is not a recovery prompt')
+assert(!retry.isRecoveryPrompt('Failed to match fingerprint', true), 'a rejected print is not a recovery prompt')
+assert(!retry.isRecoveryPrompt('', false), 'an empty PAM message is not a recovery prompt')
+
+let scan = retry.applyPamMessage(4, false, false, 'Place your finger on the fingerprint reader', false)
+assertEqual(scan.retryAttempt, 4, 'an ordinary prompt leaves the backoff where it is')
+assertEqual(scan.promptSeen, true, 'an ordinary prompt records that this conversation offered a scan')
+assertEqual(scan.readerDown, false, 'an ordinary prompt does not mark the reader down')
+scan = retry.applyConversationEnd(scan.retryAttempt + 1, true, scan.promptSeen, false)
+assertEqual(scan.retryAttempt, 5, 'a rejected scan after a prompt keeps the advanced backoff')
+assertEqual(scan.readerDown, false, 'a scan offer clears a stale down latch when the conversation ends')
+scan = retry.applyPamMessage(scan.retryAttempt, scan.readerDown, scan.promptSeen, 'Place your finger on the fingerprint reader', false)
+assertEqual(scan.retryAttempt, 5, 'the next ordinary prompt still does not erase the backoff')
+
+let down = retry.applyConversationEnd(2, false, false, false)
+assertEqual(down.readerDown, true, 'a conversation with no scan prompt marks the reader down')
+assertEqual(down.retryAttempt, 2, 'marking the reader down does not itself change the backoff')
+down = retry.applyPamMessage(down.retryAttempt, down.readerDown, down.promptSeen, 'No devices available', true)
+assertEqual(down.retryAttempt, 2, 'an error message does not reset a down reader')
+assertEqual(down.readerDown, true, 'an error message leaves a down reader down')
+down = retry.applyPamMessage(down.retryAttempt, down.readerDown, down.promptSeen, 'Verification timed out', false)
+assertEqual(down.retryAttempt, 2, 'an idle timeout does not reset a down reader')
+assertEqual(down.promptSeen, false, 'an idle timeout is not a scan prompt')
+const idleEnd = retry.applyConversationEnd(down.retryAttempt, down.readerDown, down.promptSeen, true)
+assertEqual(idleEnd.readerDown, true, 'an idle timeout does not clear a down reader')
+assertEqual(idleEnd.retryAttempt, 2, 'an idle timeout does not change the backoff count')
+down = retry.applyPamMessage(idleEnd.retryAttempt, idleEnd.readerDown, idleEnd.promptSeen, 'Place your finger on the fingerprint reader', false)
+assertEqual(down.retryAttempt, 0, 'the first scan prompt after a down reader resets the backoff')
+assertEqual(down.readerDown, false, 'that scan prompt clears the down-reader latch')
+assertEqual(down.promptSeen, true, 'that scan prompt counts as a scan offer')
+
 assertEqual(retry.lidClosedPolicy('skip'), 'skip', 'skip is an explicit lid-closed policy')
 assertEqual(retry.lidClosedPolicy('try'), 'try', 'try is an explicit lid-closed policy')
 assertEqual(retry.lidClosedPolicy(undefined), 'try', 'a missing lid policy keeps current quattro behavior')
@@ -71,8 +107,24 @@ assert(
   /if \(!fingerprintPam\.start\(\)\) \{[\s\S]*scheduleFingerprintRetry\(/.test(serviceQml),
   'a failed fingerprintPam.start still consumes the backoff'
 )
+const fingerprintPam = serviceQml.slice(
+  serviceQml.indexOf('id: fingerprintPam'),
+  serviceQml.indexOf('readonly property string lockWallpaperPath')
+)
 assert(
-  /onPamMessage:[\s\S]*fingerprintRetryAttempt = 0/.test(serviceQml),
-  'a live fingerprint prompt resets the backoff so a recovered reader is not stuck at 30s'
+  /onPamMessage:[\s\S]*FingerprintRetry\.applyPamMessage\(/.test(fingerprintPam) &&
+    !/fingerprintRetryAttempt = 0/.test(fingerprintPam) &&
+    !/if\s*\(\s*!fingerprintPam\.messageIsError && fingerprintPam\.message\s*\)/.test(serviceQml),
+  'a PAM message does not zero the backoff; only applyPamMessage can, and only for recovery'
+)
+const startFingerprint = serviceQml.match(/function startFingerprint\(\) \{[\s\S]*?\n  \}/)
+const finishedFingerprint = serviceQml.match(/function handleFingerprintFinished\(result\) \{[\s\S]*?\n  \}/)
+assert(
+  startFingerprint &&
+    /FingerprintRetry\.applyConversationEnd\(/.test(startFingerprint[0]) &&
+    finishedFingerprint &&
+    /FingerprintRetry\.applyConversationEnd\(/.test(finishedFingerprint[0]) &&
+    /scheduleFingerprintRetry\(idle\)/.test(finishedFingerprint[0]),
+  'a conversation that never offered a scan, including a failed start, latches the reader down before retrying'
 )
 JS
