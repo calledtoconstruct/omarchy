@@ -11,6 +11,9 @@ Item {
   id: root
 
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
+  // The pointer suite sets this and delivers keys itself. The overlay stays off
+  // the focused workspace so the run does not take the keyboard.
+  readonly property bool inputSuite: String(Quickshell.env("PAINT_TEST_DIR") || "") !== ""
   property var shell: null
   property var manifest: null
 
@@ -22,6 +25,7 @@ Item {
   property string preview: ""
   property bool dirty: false
   property bool writing: false
+  property string savingText: ""
   property bool painting: false
   property bool ignoreCanvas: false
   property bool canvasReady: false
@@ -131,7 +135,92 @@ Item {
     root.dismiss()
   }
 
+  function pressKey(event) {
+    if (confirmDialog.handleKey(event)) {
+      event.accepted = true
+      return
+    }
+    var ctrl = (event.modifiers & Qt.ControlModifier)
+    if (root.typing) {
+      if (event.key === Qt.Key_Escape) {
+        root.cancelText()
+      } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+        root.commitText()
+      } else if (event.key === Qt.Key_Backspace) {
+        root.typeBackspace()
+      } else if (ctrl && event.key === Qt.Key_S) {
+        root.commitText()
+        root.save()
+      } else if (ctrl && event.key === Qt.Key_Z) {
+        if (event.modifiers & Qt.ShiftModifier) root.redoPaint()
+        else root.undoPaint()
+      } else if (event.text && event.text.length && event.text.charCodeAt(0) >= 32) {
+        root.typeChar(event.text)
+      }
+      event.accepted = true
+      return
+    }
+    if (event.key === Qt.Key_Escape) {
+      root.requestClose()
+      event.accepted = true
+    } else if (ctrl && event.key === Qt.Key_S) {
+      root.save()
+      event.accepted = true
+    } else if (ctrl && event.key === Qt.Key_Z && (event.modifiers & Qt.ShiftModifier)) {
+      root.redoPaint()
+      event.accepted = true
+    } else if (ctrl && event.key === Qt.Key_Z) {
+      root.undoPaint()
+      event.accepted = true
+    } else if (event.key === Qt.Key_B) {
+      root.setTool("block")
+      event.accepted = true
+    } else if (event.key === Qt.Key_I) {
+      root.setTool("braille")
+      event.accepted = true
+    } else if (event.key === Qt.Key_S && !ctrl) {
+      root.setTool("shade")
+      event.accepted = true
+    } else if (event.key === Qt.Key_L) {
+      root.setTool("line")
+      event.accepted = true
+    } else if (event.key === Qt.Key_D) {
+      root.lineStyle = "double"
+      if (root.tool !== "line" && root.tool !== "rect") root.setTool("line")
+      event.accepted = true
+    } else if (event.key === Qt.Key_R) {
+      root.setTool("rect")
+      event.accepted = true
+    } else if (event.key === Qt.Key_F) {
+      root.setTool("fill")
+      event.accepted = true
+    } else if (event.key === Qt.Key_E) {
+      root.setTool("eraser")
+      event.accepted = true
+    } else if (event.key === Qt.Key_T) {
+      root.setTool("text")
+      event.accepted = true
+    } else if (!ctrl && event.key >= Qt.Key_1 && event.key <= Qt.Key_4) {
+      if (root.tool === "line" || root.tool === "rect") {
+        if (event.key === Qt.Key_1) root.lineStyle = "single"
+        else if (event.key === Qt.Key_2) root.lineStyle = "double"
+      } else {
+        root.shadeLevel = event.key - Qt.Key_0
+      }
+      event.accepted = true
+    } else if (event.text === "+" || event.text === "=") {
+      root.zoom = Math.min(3, root.zoom + 1)
+      event.accepted = true
+    } else if (event.text === "-" || event.text === "_") {
+      root.zoom = Math.max(1, root.zoom - 1)
+      event.accepted = true
+    }
+  }
+
   function rememberCanvas() {
+    // A load in progress has already cleared canvasReady. Keep the last ready
+    // painting so a second open that fails can restore it.
+    if (!root.canvasReady && root.retainedCanvas) return
     root.retainedPath = root.filePath
     root.retainedCanvas = root.canvas
     root.retainedReady = root.canvasReady
@@ -166,6 +255,9 @@ Item {
     if (!path) {
       root.filePath = ""
       root.loadingPath = ""
+      // Clearing the path cancels a read that has not finished, so its text
+      // cannot replace this blank canvas.
+      artFile.path = ""
       root.applyCanvas(PaintModel.createCanvas(80, 24), false)
       return
     }
@@ -174,13 +266,19 @@ Item {
 
   function restoreRetained(message) {
     root.loadingPath = ""
+    artFile.path = ""
+    var kept = root.retainedCanvas && root.retainedReady
     root.filePath = root.retainedPath || ""
-    if (root.retainedCanvas) root.canvas = root.retainedCanvas
-    root.canvasReady = !!root.retainedReady
-    root.dirty = !!root.retainedDirty
-    root.syncHistoryButtons()
-    root.refresh()
-    if (message) root.reportProblem("File was not opened", message)
+    if (kept) {
+      root.canvas = root.retainedCanvas
+      root.canvasReady = true
+      root.dirty = !!root.retainedDirty
+      root.syncHistoryButtons()
+      root.refresh()
+    } else {
+      root.applyCanvas(PaintModel.createCanvas(80, 24), false)
+    }
+    if (message && kept) root.reportProblem("File was not opened", message)
   }
 
   function applyCanvas(next, isDirty) {
@@ -565,11 +663,20 @@ Item {
 
   function finishWrite() {
     root.saveError = ""
+    root.savingText = PaintModel.serialize(root.canvas)
     artFile.path = root.filePath
-    artFile.setText(PaintModel.serialize(root.canvas))
+    artFile.setText(root.savingText)
   }
 
   function commitSaved() {
+    // Strokes made after the snapshot stay on screen and stay undoable.
+    // The file has the snapshot, so the painting is still modified.
+    if (PaintModel.serialize(root.canvas) !== root.savingText) {
+      root.writing = false
+      root.dirty = true
+      root.syncHistoryButtons()
+      return
+    }
     root.dirty = false
     root.saveError = ""
     root.history = PaintModel.createHistory()
@@ -619,27 +726,22 @@ Item {
     printErrors: false
     onLoaded: {
       if (root.writing) return
-      if (root.loadingPath) {
-        root.filePath = root.loadingPath
-        root.loadingPath = ""
-      }
+      if (!root.loadingPath || String(artFile.path) !== root.loadingPath) return
+      root.filePath = root.loadingPath
+      root.loadingPath = ""
       root.applyFile(text())
     }
     onLoadFailed: function(error) {
       if (root.writing) return
       var requested = root.loadingPath
-      if (error === FileViewError.FileNotFound && requested) {
+      if (!requested) return
+      if (error === FileViewError.FileNotFound) {
         root.filePath = requested
         root.loadingPath = ""
         root.applyCanvas(PaintModel.createCanvas(80, 24), false)
         return
       }
-      if (requested && root.retainedCanvas) {
-        root.restoreRetained("Could not read that file, so the current painting was kept.")
-        return
-      }
-      root.loadingPath = ""
-      if (!root.canvasReady) root.applyCanvas(PaintModel.createCanvas(80, 24), false)
+      root.restoreRetained("Could not read that file, so the current painting was kept.")
     }
     onSaved: {
       if (!root.writing) return
@@ -699,17 +801,18 @@ Item {
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     WlrLayershell.namespace: "omarchy-ascii-paint"
-    WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+    WlrLayershell.layer: root.inputSuite ? WlrLayer.Bottom : WlrLayer.Overlay
+    WlrLayershell.keyboardFocus: root.inputSuite ? WlrKeyboardFocus.None : WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore
 
     Rectangle {
       anchors.fill: parent
-      color: root.scrim
+      color: root.inputSuite ? "transparent" : root.scrim
     }
 
     MouseArea {
       anchors.fill: parent
+      enabled: !root.inputSuite
       onClicked: root.requestClose()
     }
 
@@ -722,6 +825,7 @@ Item {
       color: root.background
       borderSpec: root.borderSpec
       padding: root.contentMargin
+      opacity: root.inputSuite ? 0 : 1
 
       MouseArea { anchors.fill: parent; onClicked: {} }
 
@@ -731,87 +835,7 @@ Item {
         focus: true
 
         Keys.priority: Keys.BeforeItem
-        Keys.onPressed: function(event) {
-          if (confirmDialog.handleKey(event)) {
-            event.accepted = true
-            return
-          }
-          var ctrl = (event.modifiers & Qt.ControlModifier)
-          if (root.typing) {
-            if (event.key === Qt.Key_Escape) {
-              root.cancelText()
-            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-              root.commitText()
-            } else if (event.key === Qt.Key_Backspace) {
-              root.typeBackspace()
-            } else if (ctrl && event.key === Qt.Key_S) {
-              root.commitText()
-              root.save()
-            } else if (ctrl && event.key === Qt.Key_Z) {
-              if (event.modifiers & Qt.ShiftModifier) root.redoPaint()
-              else root.undoPaint()
-            } else if (event.text && event.text.length && event.text.charCodeAt(0) >= 32) {
-              root.typeChar(event.text)
-            }
-            event.accepted = true
-            return
-          }
-          if (event.key === Qt.Key_Escape) {
-            root.requestClose()
-            event.accepted = true
-          } else if (ctrl && event.key === Qt.Key_S) {
-            root.save()
-            event.accepted = true
-          } else if (ctrl && event.key === Qt.Key_Z && (event.modifiers & Qt.ShiftModifier)) {
-            root.redoPaint()
-            event.accepted = true
-          } else if (ctrl && event.key === Qt.Key_Z) {
-            root.undoPaint()
-            event.accepted = true
-          } else if (event.key === Qt.Key_B) {
-            root.setTool("block")
-            event.accepted = true
-          } else if (event.key === Qt.Key_I) {
-            root.setTool("braille")
-            event.accepted = true
-          } else if (event.key === Qt.Key_S && !ctrl) {
-            root.setTool("shade")
-            event.accepted = true
-          } else if (event.key === Qt.Key_L) {
-            root.setTool("line")
-            event.accepted = true
-          } else if (event.key === Qt.Key_D) {
-            root.lineStyle = "double"
-            if (root.tool !== "line" && root.tool !== "rect") root.setTool("line")
-            event.accepted = true
-          } else if (event.key === Qt.Key_R) {
-            root.setTool("rect")
-            event.accepted = true
-          } else if (event.key === Qt.Key_F) {
-            root.setTool("fill")
-            event.accepted = true
-          } else if (event.key === Qt.Key_E) {
-            root.setTool("eraser")
-            event.accepted = true
-          } else if (event.key === Qt.Key_T) {
-            root.setTool("text")
-            event.accepted = true
-          } else if (!ctrl && event.key >= Qt.Key_1 && event.key <= Qt.Key_4) {
-            if (root.tool === "line" || root.tool === "rect") {
-              if (event.key === Qt.Key_1) root.lineStyle = "single"
-              else if (event.key === Qt.Key_2) root.lineStyle = "double"
-            } else {
-              root.shadeLevel = event.key - Qt.Key_0
-            }
-            event.accepted = true
-          } else if (event.text === "+" || event.text === "=") {
-            root.zoom = Math.min(3, root.zoom + 1)
-            event.accepted = true
-          } else if (event.text === "-" || event.text === "_") {
-            root.zoom = Math.max(1, root.zoom - 1)
-            event.accepted = true
-          }
-        }
+        Keys.onPressed: function(event) { root.pressKey(event) }
 
         Item {
           id: chrome
