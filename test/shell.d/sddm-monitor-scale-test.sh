@@ -122,8 +122,65 @@ cat >"$monitor_lua" <<'LUA'
 local omarchy_monitor_scale = 3 / 2
 LUA
 run_helper
-grep -Fx 'auto' "$scale_file" >/dev/null || fail "helper replaces a stale scale when the config is unresolved" "$(cat "$scale_file" 2>/dev/null || true)"
-pass "helper replaces a stale scale when the config is unresolved"
+grep -Fx '3' "$scale_file" >/dev/null || fail "helper keeps a saved scale when the config is an expression" "$(cat "$scale_file" 2>/dev/null || true)"
+pass "helper keeps a saved scale when the config is an expression"
+
+printf '1.5\n' >"$scale_file"
+run_helper
+grep -Fx '1.5' "$scale_file" >/dev/null || fail "helper does not invent a scale from an expression" "$(cat "$scale_file" 2>/dev/null || true)"
+pass "helper does not invent a scale from an expression"
+
+# Shipped monitors.lua points the catch-all at the local. The variable reference
+# is not a scale, so the local still wins over a previously saved drop-in.
+cat >"$monitor_lua" <<'LUA'
+local omarchy_monitor_scale = 1.6
+hl.monitor({ output = "", mode = "preferred", position = "auto", scale = omarchy_monitor_scale })
+LUA
+printf '3\n' >"$scale_file"
+run_helper
+grep -Fx '1.6' "$scale_file" >/dev/null || fail "helper reads the local when the catch-all references it" "$(cat "$scale_file" 2>/dev/null || true)"
+pass "helper reads the local when the catch-all references it"
+
+# The literal catch-all that monitor scaling persists. Logout must read it,
+# not replace the greeter drop-in with auto.
+cat >"$monitor_lua" <<'LUA'
+hl.monitor({ output = "", mode = "preferred", position = "auto", scale = 1.6 })
+LUA
+printf '3\n' >"$scale_file"
+run_helper
+grep -Fx '1.6' "$scale_file" >/dev/null || fail "helper reads a literal catch-all monitor scale" "$(cat "$scale_file" 2>/dev/null || true)"
+pass "helper reads a literal catch-all monitor scale"
+
+rm -f "$scale_file"
+run_helper
+grep -Fx '1.6' "$scale_file" >/dev/null || fail "helper writes a literal catch-all scale with no saved drop-in" "$(cat "$scale_file" 2>/dev/null || true)"
+pass "helper writes a literal catch-all scale with no saved drop-in"
+
+cat >"$monitor_lua" <<'LUA'
+hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })
+LUA
+printf '2\n' >"$scale_file"
+run_helper
+grep -Fx 'auto' "$scale_file" >/dev/null || fail "helper reads a quoted auto catch-all scale" "$(cat "$scale_file" 2>/dev/null || true)"
+pass "helper reads a quoted auto catch-all scale"
+
+# An expression on the catch-all rule is not evaluated, and a saved scale stays.
+cat >"$monitor_lua" <<'LUA'
+hl.monitor({ output = "", mode = "preferred", position = "auto", scale = 3 / 2 })
+LUA
+printf '2\n' >"$scale_file"
+run_helper
+grep -Fx '2' "$scale_file" >/dev/null || fail "helper keeps a saved scale when the catch-all scale is an expression" "$(cat "$scale_file" 2>/dev/null || true)"
+pass "helper keeps a saved scale when the catch-all scale is an expression"
+
+# A specific output is not the supported catch-all, so it must not become the greeter scale.
+cat >"$monitor_lua" <<'LUA'
+hl.monitor({ output = "DP-1", mode = "preferred", position = "auto", scale = 2 })
+LUA
+rm -f "$scale_file"
+run_helper
+grep -Fx 'auto' "$scale_file" >/dev/null || fail "helper does not invent a scale from a specific output rule" "$(cat "$scale_file" 2>/dev/null || true)"
+pass "helper does not invent a scale from a specific output rule"
 
 rm -f "$scale_file"
 status=0
@@ -165,6 +222,12 @@ grep -F 'chmod 644' "$helper" >/dev/null ||
   fail "helper sets the drop-in file mode to 644"
 ! grep -F 'pkexec' "$helper" >/dev/null || fail "helper does not wrap the write in pkexec"
 pass "helper uses the passwordless sudoers rules"
+
+grep -F 'omarchy-notification-send' "$helper" >/dev/null ||
+  fail "helper reports a failed greeter scale write"
+grep -F 'omarchy-sddm-set-monitor-scale "$new_scale" || true' "$ROOT/bin/omarchy-hyprland-monitor-scaling" >/dev/null ||
+  fail "monitor scaling does not depend on the greeter scale write"
+pass "helper reports a failed greeter scale write"
 
 grep -F 'omarchy-sddm-set-monitor-scale || true' "$ROOT/bin/omarchy-system-logout" >/dev/null ||
   fail "logout persists the greeter monitor scale"
