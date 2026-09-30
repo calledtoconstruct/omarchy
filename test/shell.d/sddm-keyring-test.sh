@@ -37,7 +37,7 @@ chmod +x "$test_dir/bin/sudo"
 
 sed "s|^pam=/etc/pam.d/sddm-autologin$|pam=$pam|" "$shipped_migration" >"$test_dir/migration.sh"
 
-cat >"$pam" <<'PAM'
+cat >"$test_dir/pam-fixture" <<'PAM'
 #%PAM-1.0
 auth        required    pam_permit.so
 -auth       optional    pam_gnome_keyring.so
@@ -47,6 +47,7 @@ password    include     system-local-login
 -session    optional    pam_gnome_keyring.so auto_start
 session     include     system-local-login
 PAM
+cp "$test_dir/pam-fixture" "$pam"
 
 : >"$calls"
 CALLS="$calls" PATH="$test_dir/bin:$PATH" bash -euo pipefail "$test_dir/migration.sh" >/dev/null
@@ -57,10 +58,35 @@ grep -q 'pam_gnome_keyring.so auto_start' "$pam" ||
 if grep -qE -- '-auth.*pam_gnome_keyring\.so|-password.*pam_gnome_keyring\.so' "$pam"; then
   fail "keyring strip removes autologin auth and password gnome-keyring modules"
 fi
-grep -q '^sudo sed' "$calls" || fail "non-root migration elevates with sudo"
+# Root runs the migration's direct sed path, so the sudo stub stays silent.
+if (( EUID != 0 )); then
+  grep -q '^sudo sed' "$calls" || fail "non-root migration elevates with sudo"
+else
+  [[ ! -s $calls ]] || fail "root migration edits the autologin stack without sudo" "$(<"$calls")"
+fi
 pass "keyring strip removes autologin auth and password gnome-keyring modules"
 
 : >"$calls"
 CALLS="$calls" PATH="$test_dir/bin:$PATH" bash -euo pipefail "$test_dir/migration.sh" >/dev/null
 [[ ! -s $calls ]] || fail "an already-stripped autologin stack is a no-op" "$(<"$calls")"
 pass "an already-stripped autologin stack is a no-op"
+
+# install/login/sddm.sh hardcodes /etc/pam.d. Point a copy at the fixture
+# instead of editing the host PAM stacks or the installer.
+install_pam_dir="$test_dir/etc/pam.d"
+mkdir -p "$install_pam_dir"
+cp "$test_dir/pam-fixture" "$install_pam_dir/sddm"
+cp "$test_dir/pam-fixture" "$install_pam_dir/sddm-autologin"
+sed "s|/etc/pam.d|$install_pam_dir|g" "$script" >"$test_dir/install-sddm.sh"
+bash -euo pipefail "$test_dir/install-sddm.sh"
+
+for stack in sddm sddm-autologin; do
+  target="$install_pam_dir/$stack"
+  grep -q 'pam_permit.so' "$target" || fail "fresh install keeps required auth in $stack"
+  grep -q 'pam_gnome_keyring.so auto_start' "$target" ||
+    fail "fresh install keeps session keyring auto_start in $stack"
+  if grep -qE -- '-auth.*pam_gnome_keyring\.so|-password.*pam_gnome_keyring\.so' "$target"; then
+    fail "fresh install removes auth and password gnome-keyring modules from $stack"
+  fi
+done
+pass "fresh install strips password and autologin keyring auth"
