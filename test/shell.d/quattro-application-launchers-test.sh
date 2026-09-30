@@ -158,3 +158,31 @@ ALACRITTY_PRESENT=0 run_migration
 
 [[ $(<"$icons/GitHub.png") == newer-icon ]] || fail "migration restores from the newest upgrade backup" "$(<"$icons/GitHub.png")"
 pass "migration restores from the newest upgrade backup"
+
+# Refresh is what the upgrade tells a user to rerun, and it must put the same
+# referenced PNGs back. A fixture tree keeps mise.sh from running for real.
+refresh_root="$test_dir/omarchy"
+mkdir -p "$refresh_root/applications" "$refresh_root/install/helpers"
+ln -s "$ROOT/install/helpers/quattro-app-icons.sh" "$refresh_root/install/helpers/quattro-app-icons.sh"
+printf '%s\n' '[Desktop Entry]' 'Name=Basecamp' 'Icon=basecamp' >"$refresh_root/applications/Basecamp.desktop"
+
+run_refresh() {
+  HOME="$home" OMARCHY_PATH="$refresh_root" bash "$ROOT/bin/omarchy-refresh-applications" >/dev/null
+}
+
+reset_home
+older="$apps/icons.omarchy-upgrade-to-quattro.20260101000000.bak"
+mkdir -p "$older"
+printf 'older-icon\n' >"$older/GitHub.png"
+printf 'newer-icon\n' >"$backup/GitHub.png"
+printf 'unrelated\n' >"$backup/windows.png"
+write_desktop "$apps/GitHub.desktop" "$icons/GitHub.png"
+write_desktop "$apps/windows.desktop" "$icons/../windows.png"
+printf '%s\n' '[Desktop Entry]' 'Name=Alacritty' 'Icon=Alacritty' >"$apps/Alacritty.desktop"
+run_refresh
+
+[[ $(<"$icons/GitHub.png") == newer-icon ]] || fail "refresh-applications restores a referenced icon from the newest Quattro backup" "$(<"$icons/GitHub.png")"
+[[ ! -e $icons/windows.png && ! -e $apps/windows.png ]] || fail "refresh-applications does not restore an unreferenced or non-exact icon"
+[[ -f $apps/Basecamp.desktop ]] || fail "refresh-applications still installs packaged launchers"
+[[ -f $apps/Alacritty.desktop ]] || fail "refresh-applications leaves Alacritty.desktop removal to the migration"
+pass "refresh-applications restores referenced icons from the Quattro backup"
