@@ -53,6 +53,7 @@ remove_output=$(PATH="$stub_dir:$PATH" OMARCHY_DEV_ENV_LOG="$log" "$ROOT/bin/oma
 [[ $remove_output != *"Done!"* ]] ||
   fail "failed firebase removal does not print success" "$remove_output"
 grep -Fxq 'mise uninstall firebase --all' "$log" || fail "failed firebase removal still calls mise" "$(cat "$log")"
+grep -Fxq 'mise rm -g firebase' "$log" || fail "failed firebase uninstall still clears the global pin" "$(cat "$log")"
 pass "failed firebase removal does not report success"
 
 run_node_test <<'JS'
