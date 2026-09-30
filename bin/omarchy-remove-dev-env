@@ -147,7 +147,13 @@ scala)
   ;;
 firebase)
   echo -e "Removing Firebase CLI...\n"
-  if ! mise uninstall firebase --all || ! mise rm -g firebase; then
+  # A failed uninstall must not skip the global pin. mise up would reinstall it,
+  # and Remove disappears once the install directory is gone.
+  uninstall_status=0
+  pin_status=0
+  mise uninstall firebase --all || uninstall_status=$?
+  mise rm -g firebase || pin_status=$?
+  if (( uninstall_status != 0 || pin_status != 0 )); then
     exit 1
   fi
   ;;
