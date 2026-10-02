@@ -11,7 +11,7 @@ socket='${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/omarchy}/omarch
 
 grep -Fq 'GSR_SOCKET="$RUNTIME_DIR/omarchy-gsr.sock"' "$capture" ||
   fail "capture helper uses the shared Omarchy gsr socket"
-grep -Fq -- '-ipc "$GSR_SOCKET"' "$capture" ||
+grep -Eq '^ *gpu-screen-recorder .*-ipc "\$GSR_SOCKET"' "$capture" ||
   fail "gpu-screen-recorder is launched with -ipc on the shared socket"
 grep -Fq 'gsr-cli -ipc "$GSR_SOCKET" status' "$capture" ||
   fail "capture helper gates on gsr-cli status for the shared socket"
