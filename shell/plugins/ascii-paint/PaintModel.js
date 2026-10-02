@@ -396,12 +396,14 @@ function floodFill(canvas, col, row, replacement) {
   var fill = replacement && replacement.kind ? cloneCell(replacement) : emptyCell()
   if (cellsEqual(target, fill)) return
   var queue = [{ c: col, r: row }]
+  var head = 0
   var seen = {}
   var key
   var next
   var cell
-  while (queue.length) {
-    next = queue.shift()
+  while (head < queue.length) {
+    next = queue[head]
+    head += 1
     key = next.c + "," + next.r
     if (seen[key]) continue
     seen[key] = true

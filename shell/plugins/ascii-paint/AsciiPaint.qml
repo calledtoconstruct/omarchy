@@ -675,6 +675,7 @@ Item {
       root.writing = false
       root.dirty = true
       root.syncHistoryButtons()
+      root.runPreview()
       return
     }
     root.dirty = false
@@ -802,7 +803,9 @@ Item {
     color: "transparent"
     WlrLayershell.namespace: "omarchy-ascii-paint"
     WlrLayershell.layer: root.inputSuite ? WlrLayer.Bottom : WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: root.inputSuite ? WlrKeyboardFocus.None : WlrKeyboardFocus.Exclusive
+    // The input suite focuses the key catcher on demand so Qt Test can deliver
+    // real key events. None would leave the surface unable to receive them.
+    WlrLayershell.keyboardFocus: root.inputSuite ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore
 
     Rectangle {
@@ -831,6 +834,7 @@ Item {
 
       Item {
         id: keyCatcher
+        objectName: "ascii-paint-keys"
         anchors.fill: parent
         focus: true
 

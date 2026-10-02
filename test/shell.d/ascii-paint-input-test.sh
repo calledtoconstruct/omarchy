@@ -34,11 +34,11 @@ fi
 EOF
 cat > "$work/omarchy/bin/omarchy-launch-screensaver" << EOF
 #!/bin/bash
-printf '%s\n' "\$*" >> "$work/home/preview.log"
+printf '%s %s\n' "\$(basename "\$0")" "\$*" >> "$work/home/preview.log"
 EOF
 cat > "$work/omarchy/bin/omarchy-launch-about" << EOF
 #!/bin/bash
-printf '%s\n' "\$*" >> "$work/home/preview.log"
+printf '%s %s\n' "\$(basename "\$0")" "\$*" >> "$work/home/preview.log"
 EOF
 chmod +x "$work/omarchy/bin/omarchy-file-select" "$work/omarchy/bin/omarchy-launch-screensaver" "$work/omarchy/bin/omarchy-launch-about"
 
@@ -67,6 +67,7 @@ expected=(
   "RESULT ok zoom"
   "RESULT ok canvas edges"
   "RESULT ok save "
+  "RESULT ok preview after overlapped save"
   "RESULT ok discard dialog"
   "RESULT ok open asks first"
   "RESULT ok open and save as"
@@ -81,7 +82,9 @@ grep -q $'\xe2\x96\x98' "$work/home/blank.txt" || fail "save wrote the quadrant 
 pass "save wrote the quadrant the pointer painted"
 cmp -s "$work/home/blank-before.txt" "$work/home/blank.txt.bak" || fail "save keeps the previous text in the .bak" "$(od -An -tx1 "$work/home/blank.txt.bak")"
 pass "save keeps the previous file as .bak"
-grep -q 'force' "$work/home/preview.log" || fail "save with a screensaver preview launches the screensaver" "$(cat "$work/home/preview.log")"
+grep -q 'omarchy-launch-screensaver force' "$work/home/preview.log" || fail "save with a screensaver preview launches the screensaver" "$(cat "$work/home/preview.log")"
 pass "save with a screensaver preview launches the screensaver"
+grep -q 'omarchy-launch-about' "$work/home/preview.log" || fail "a save whose canvas moved on still previews the saved file" "$(cat "$work/home/preview.log")"
+pass "a save whose canvas moved on still previews the saved file"
 [[ -f $work/home/saved-as.txt ]] || fail "save as wrote the chooser path"
 pass "save as wrote the chooser path"

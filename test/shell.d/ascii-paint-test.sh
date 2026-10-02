@@ -137,6 +137,16 @@ assertEqual(glyph(fill, 0, 0), '\u2592', 'flood fill replaces the connected bloc
 assertEqual(glyph(fill, 1, 0), '\u2592', 'flood fill walks neighbors of the same cell')
 assertEqual(glyph(fill, 2, 0), '\u2598', 'flood fill stops at a different cell')
 
+const flooded = paint.createCanvas(200, 80)
+paint.setBlockBits(flooded, 50, 20, 15)
+paint.floodFill(flooded, 0, 0, { kind: 'shade', level: 1 })
+assertEqual(glyph(flooded, 0, 0), '\u2591', 'a large flood fill paints the start cell')
+assertEqual(glyph(flooded, 199, 79), '\u2591', 'a large flood fill reaches the far corner')
+assertEqual(glyph(flooded, 50, 20), '\u2588', 'a large flood fill stops at a wall')
+const floodSource = fs.readFileSync(path.join(root, 'shell/plugins/ascii-paint/PaintModel.js'), 'utf8')
+const floodFn = floodSource.split('function floodFill')[1].split('function createHistory')[0]
+assert(!/\.shift\(/.test(floodFn), 'flood fill consumes its queue by index instead of shift')
+
 const history = paint.createHistory()
 const edited = paint.createCanvas(1, 1)
 assertEqual(paint.canUndo(history), false, 'a new history cannot undo')

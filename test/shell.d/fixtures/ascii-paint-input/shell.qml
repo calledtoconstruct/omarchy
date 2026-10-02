@@ -119,19 +119,21 @@ ShellRoot {
     }
 
     function tapKey(key, modifiers) {
-      var text = ""
-      var code = key
-      if (typeof key === "string") {
-        text = key
-        code = key.charCodeAt(0)
+      var catcher = find(painter, function(item) { return item.objectName === "ascii-paint-keys" })
+      check(catcher, "the paint surface has no key catcher")
+      var spins = 0
+      while (spins < 20) {
+        catcher.forceActiveFocus()
+        wait(30)
+        try {
+          keyClick(key, modifiers || Qt.NoModifier)
+          wait(20)
+          return
+        } catch (e) {
+          spins++
+        }
       }
-      painter.pressKey({
-        key: code,
-        text: text,
-        modifiers: modifiers || Qt.NoModifier,
-        accepted: false
-      })
-      wait(20)
+      fail("key event was not delivered through Keys.onPressed")
     }
 
     function run() {
@@ -330,6 +332,16 @@ ShellRoot {
       check(painter.filePath === blank, "save keeps the open path")
       console.log("RESULT ok save " + painted)
       wait(400)
+
+      discard()
+      openPayload({ path: blank, preview: "about" })
+      painter.savingText = "snapshot-that-is-not-the-canvas"
+      painter.writing = true
+      painter.dirty = true
+      painter.commitSaved()
+      check(painter.dirty, "paint after the saved snapshot stays unsaved")
+      wait(400)
+      console.log("RESULT ok preview after overlapped save")
 
       openPayload({})
       tapKey(Qt.Key_L)
