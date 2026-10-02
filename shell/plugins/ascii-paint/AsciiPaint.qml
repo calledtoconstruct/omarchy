@@ -669,6 +669,9 @@ Item {
   }
 
   function commitSaved() {
+    // A save that finishes while an earlier preview timer is still waiting
+    // must not let that timer launch a second About or screensaver.
+    writeGuard.stop()
     // Strokes made after the snapshot stay on screen and stay undoable.
     // The file has the snapshot, so the painting is still modified.
     if (PaintModel.serialize(root.canvas) !== root.savingText) {

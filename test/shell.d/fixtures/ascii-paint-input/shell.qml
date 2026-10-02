@@ -343,6 +343,17 @@ ShellRoot {
       wait(400)
       console.log("RESULT ok preview after overlapped save")
 
+      discard()
+      openPayload({ path: blank, preview: "screensaver" })
+      painter.savingText = PaintModel.serialize(painter.canvas)
+      painter.writing = true
+      painter.commitSaved()
+      painter.savingText = "snapshot-that-is-not-the-canvas"
+      painter.writing = true
+      painter.commitSaved()
+      wait(400)
+      console.log("RESULT ok one preview for a rapid second save")
+
       openPayload({})
       tapKey(Qt.Key_L)
       clickCell(1, 1, 0.5, 0.5)
