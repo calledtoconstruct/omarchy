@@ -251,6 +251,7 @@ stop_screenrecording() {
     rm -f "$RECORDING_FILE"
   else
     omarchy-notification-send -u critical -t 5000 "Screen recording error" "Could not stop the recording through gsr-cli."
+    return 1
   fi
 }
 
