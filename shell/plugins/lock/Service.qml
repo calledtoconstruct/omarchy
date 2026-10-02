@@ -153,7 +153,8 @@ Item {
   }
 
   function applyLidClosed(closed) {
-    var wasClosed = laptopClosedKnown && laptopClosed
+    var lidWasKnown = laptopClosedKnown
+    var wasClosed = lidWasKnown && laptopClosed
     laptopClosed = closed
     laptopClosedKnown = true
 
@@ -166,7 +167,10 @@ Item {
       return
     }
 
-    if (wasClosed && !closed) startFingerprint()
+    // The first reading has to start fingerprint too. Before it arrives,
+    // laptopClosed is still the default false, so starting earlier would arm
+    // PAM on a closed lid. Later polls only start on closed to open.
+    if (!lidWasKnown || (wasClosed && !closed)) startFingerprint()
   }
 
   function logEvent(event) {
@@ -315,6 +319,10 @@ Item {
 
   function startFingerprint() {
     if (!lockRequested || !sessionLock.secure || !fingerprintConfigured) return
+    if (fingerprintLidClosed === "skip" && !laptopClosedKnown) {
+      refreshLidState()
+      return
+    }
     if (fingerprintBlockedByLid()) return
     if (fingerprintPam.active || fingerprintAuthenticating) return
 

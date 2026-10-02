@@ -50,4 +50,12 @@ assert(
   /function applyLidClosed[\s\S]*wasClosed && !closed/.test(serviceQml),
   'the lid poll starts fingerprint only on a closed-to-open transition'
 )
+assert(
+  /function startFingerprint\(\)[\s\S]*?fingerprintLidClosed === "skip" && !laptopClosedKnown[\s\S]*?refreshLidState\(\)/.test(serviceQml),
+  'skip mode waits for the first lid reading before starting fingerprint PAM'
+)
+assert(
+  /function applyLidClosed[\s\S]*!lidWasKnown[\s\S]*startFingerprint\(\)/.test(serviceQml),
+  'the first open-lid reading starts fingerprint after the check returns'
+)
 JS
