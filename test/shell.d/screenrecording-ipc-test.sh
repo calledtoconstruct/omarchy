@@ -126,10 +126,8 @@ saved=$("$capture" --stop-recording)
   fail "a successful stop prints the saved recording" "$saved"
 [[ ! -e $runtime/omarchy-screenrecord-filename ]] ||
   fail "a successful stop removes the recording filename"
-grep -Fq "stop" "$GSR_LOG" ||
-  fail "a successful stop calls gsr-cli stop" "$(cat "$GSR_LOG")"
-grep -Fq "$runtime/omarchy-gsr.sock" "$GSR_LOG" ||
-  fail "stop uses the Omarchy gsr socket" "$(cat "$GSR_LOG")"
+grep -Fqx -- "-ipc $runtime/omarchy-gsr.sock stop" "$GSR_LOG" ||
+  fail "a successful stop calls gsr-cli stop on the Omarchy gsr socket" "$(cat "$GSR_LOG")"
 pass "a successful gsr-cli stop prints the recording and clears its filename"
 
 grep -Fq -- '-f WebcamOverlay' "$videos/pkill.log" ||
