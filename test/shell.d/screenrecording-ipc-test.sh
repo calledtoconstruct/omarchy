@@ -26,6 +26,8 @@ fi
 
 grep -Fq 'Quickshell.env("XDG_RUNTIME_DIR")' "$recording" ||
   fail "indicator builds the gsr socket from XDG_RUNTIME_DIR"
+grep -qx 'import Quickshell' "$recording" ||
+  fail "indicator imports Quickshell, which Quickshell.env needs"
 grep -Fq '"gsr-cli", "-ipc"' "$recording" ||
   fail "indicator status uses gsr-cli -ipc"
 grep -Fq '"status"' "$recording" ||
