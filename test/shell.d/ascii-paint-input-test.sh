@@ -68,6 +68,7 @@ expected=(
   "RESULT ok canvas edges"
   "RESULT ok save "
   "RESULT ok preview after overlapped save"
+  "RESULT ok one preview for a rapid second save"
   "RESULT ok discard dialog"
   "RESULT ok open asks first"
   "RESULT ok open and save as"
@@ -86,5 +87,9 @@ grep -q 'omarchy-launch-screensaver force' "$work/home/preview.log" || fail "sav
 pass "save with a screensaver preview launches the screensaver"
 grep -q 'omarchy-launch-about' "$work/home/preview.log" || fail "a save whose canvas moved on still previews the saved file" "$(cat "$work/home/preview.log")"
 pass "a save whose canvas moved on still previews the saved file"
+screensavers=$(grep -c 'omarchy-launch-screensaver force' "$work/home/preview.log" || true)
+[[ $screensavers -eq 2 ]] ||
+  fail "a rapid second save launches one preview, not two" "screensaver previews: $screensavers"$'\n'"$(cat "$work/home/preview.log")"
+pass "a rapid second save launches one preview, not two"
 [[ -f $work/home/saved-as.txt ]] || fail "save as wrote the chooser path"
 pass "save as wrote the chooser path"
