@@ -88,11 +88,17 @@ cat >"$stub_bin/ffmpeg" <<'SH'
 #!/bin/bash
 exit 1
 SH
+cat >"$stub_bin/pkill" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >>"${PKILL_LOG:?}"
+exit 0
+SH
 chmod +x "$stub_bin"/*
 
 export PATH="$stub_bin:$PATH"
 export GSR_LOG="$videos/gsr.log"
 export NOTE_LOG="$videos/note.log"
+export PKILL_LOG="$videos/pkill.log"
 export XDG_RUNTIME_DIR="$runtime"
 export OMARCHY_SCREENRECORD_DIR="$videos"
 
@@ -125,3 +131,7 @@ grep -Fq "stop" "$GSR_LOG" ||
 grep -Fq "$runtime/omarchy-gsr.sock" "$GSR_LOG" ||
   fail "stop uses the Omarchy gsr socket" "$(cat "$GSR_LOG")"
 pass "a successful gsr-cli stop prints the recording and clears its filename"
+
+grep -Fq -- '-f WebcamOverlay' "$videos/pkill.log" ||
+  fail "stop cleanup does not call the stubbed pkill" "$(cat "$videos/pkill.log" 2>/dev/null || true)"
+pass "stop cleanup calls the stubbed pkill instead of a live WebcamOverlay"
