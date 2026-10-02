@@ -7,9 +7,9 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 recording="$ROOT/shell/plugins/bar/indicators/ScreenRecording.qml"
 capture="$ROOT/bin/omarchy-capture-screenrecording"
 menu="$ROOT/default/omarchy/omarchy-menu.jsonc"
-socket='${XDG_RUNTIME_DIR:-/tmp}/omarchy-gsr.sock'
+socket='${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/omarchy}/omarchy-gsr.sock'
 
-grep -Fq "GSR_SOCKET=\"$socket\"" "$capture" ||
+grep -Fq 'GSR_SOCKET="$RUNTIME_DIR/omarchy-gsr.sock"' "$capture" ||
   fail "capture helper uses the shared Omarchy gsr socket"
 grep -Fq -- '-ipc "$GSR_SOCKET"' "$capture" ||
   fail "gpu-screen-recorder is launched with -ipc on the shared socket"

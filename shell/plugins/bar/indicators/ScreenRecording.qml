@@ -15,7 +15,7 @@ BarIndicator {
 
   function refresh() {
     if (!root.bar || statusProc.running) return
-    var runtimeDir = Quickshell.env("XDG_RUNTIME_DIR") || "/tmp"
+    var runtimeDir = Quickshell.env("XDG_RUNTIME_DIR") || (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state") + "/omarchy"
     statusProc.command = ["gsr-cli", "-ipc", runtimeDir + "/omarchy-gsr.sock", "status"]
     statusProc.running = true
   }
