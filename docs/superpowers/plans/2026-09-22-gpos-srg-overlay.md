@@ -26,6 +26,8 @@
 - Create: `docs/compliance/gpos-srg-v3r3-overlay.md`
 - Create: `docs/compliance/gpos-srg-v3r3-overlay.csv`
 - Create: `test/shell.d/gpos-srg-overlay-test.sh`
+- Create: `bin/omarchy-gpos-overlay`
+- Create: `test/shell.d/gpos-overlay-check-test.sh`
 
 ## File structure (omarchy-pkgs)
 
@@ -283,3 +285,44 @@ Expected: `PASS: sync-restricted copies allowlisted signed packages only`
 git add data/restricted/allowlist bin/sync-restricted tests/sync-restricted.sh
 git commit -m "feat: copy-from-stable restricted package stream"
 ```
+
+---
+
+### Task 3: Read-only overlay checker (omarchy)
+
+Tasks 1 and 2 are already implemented. This task reports the 21 catalog rows against a machine. It does not apply fixes.
+
+**Files:**
+- Create: `bin/omarchy-gpos-overlay`
+- Create: `test/shell.d/gpos-overlay-check-test.sh`
+- Update: `docs/compliance/README.md`, `docs/compliance/gpos-srg-v3r3-overlay.md`, `docs/compliance/gpos-cati-product-map.md`
+
+**Interfaces:**
+- `--root DIR` reads a fixture instead of the live machine. Config lock file is `$DIR/config/omarchy/shell.json`.
+- `--json` prints one array of `{vuln_id, catalog, observed, note}`.
+- `--fail-on-gap` exits 2 when any observed status is `gap`.
+- Text rows look like `V-203629 catalog=implemented observed=implemented yescrypt`.
+- Stderr says this is not a STIG.
+- V-203776 and V-203739 stay `gap` even when `proc/sys/crypto/fips_enabled` is `1`.
+- `idle.lock` from 1 through 900 seconds is observed `partial`. Above 900, or missing, is `gap`.
+- The command must not create or modify files under `--root`.
+
+- [x] **Step 1: Write the failing test**
+
+`test/shell.d/gpos-overlay-check-test.sh` builds a stock-shaped root (yescrypt, LUKS, stable https, SigLevel Required, SDDM autologin, bluez, `omarchy-sudo-passwordless`, lock 300) and asserts 21 rows. It then turns the FIPS flag on, drifts the root (sshd enabled, vsftpd, NOPASSWD ALL, TrustAll, http edge, lock 1800), and checks a gov-shaped root (no autologin file, no passwordless command, lock 900).
+
+- [x] **Step 2: Run test to verify it fails**
+
+Run: `bash test/shell.d/gpos-overlay-check-test.sh`
+
+Expected: `not ok - omarchy-gpos-overlay exists`
+
+- [x] **Step 3: Write the checker**
+
+`bin/omarchy-gpos-overlay` reads the catalog CSV next to the script. Observed status uses the same vocabulary as the catalog. Do not change default `idle.lock`, do not remove passwordless sudo, do not enable FIPS, do not submit the Vendor STIG Intent Form.
+
+- [x] **Step 4: Run tests**
+
+Run: `bash test/shell.d/gpos-overlay-check-test.sh` and `bash test/shell.d/gpos-srg-overlay-test.sh`
+
+Expected: `ok - gpos overlay checker` and `ok - gpos srg overlay packet`
