@@ -4,7 +4,7 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 require_command jq
 
 cmd="$ROOT/bin/omarchy-pkg-advisories"
-sidecar="$ROOT/test/shell.d/fixtures/advisories/omarchy.advisories.json"
+sidecar="$ROOT/test/shell.d/fixtures/advisories"
 installed=$(mktemp)
 trap 'rm -f "$installed"' EXIT
 cat >"$installed" <<'EOF'
@@ -27,7 +27,7 @@ set +e
 miss=$?
 set -e
 [[ $miss -eq 0 ]] || fail "missing sidecar is fail-open exit 0"
-grep -qi 'sidecar' /tmp/omarchy-adv-missing.out || fail "missing sidecar prints a warning"
+grep -qi 'advisory directory' /tmp/omarchy-adv-missing.out || fail "missing advisory directory prints a warning"
 
 set +e
 "$cmd" --sidecar "$sidecar" --installed-file "$installed" --fail-closed
