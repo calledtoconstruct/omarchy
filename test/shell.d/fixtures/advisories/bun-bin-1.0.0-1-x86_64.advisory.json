@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "pkgname": "bun-bin",
+  "pkgver": "1.0.0",
+  "pkgrel": "1",
+  "arch": "x86_64",
+  "artifact": "bun-bin-1.0.0-1-x86_64.pkg.tar.zst",
+  "cve_ids": [],
+  "cve_max_severity": "NONE",
+  "severity_scale": "",
+  "advisory_as_of": "",
+  "scanned_at": "2026-09-22T00:00:00Z",
+  "scan_source": "osv.dev",
+  "scan_status": "missing",
+  "note": ""
+}

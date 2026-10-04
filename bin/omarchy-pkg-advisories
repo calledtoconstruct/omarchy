@@ -28,7 +28,7 @@ while [[ $# -gt 0 ]]; do
     shift
     ;;
   -h|--help)
-    echo "Usage: omarchy-pkg-advisories [--sidecar PATH] [--installed-file PATH] [--json] [--fail-closed]"
+    echo "Usage: omarchy-pkg-advisories [--sidecar DIR] [--installed-file PATH] [--json] [--fail-closed]"
     exit 0
     ;;
   *)
@@ -40,18 +40,18 @@ done
 
 if [[ -z $SIDECAR ]]; then
   for candidate in \
-    /var/lib/pacman/sync/omarchy.advisories.json \
-    /usr/share/omarchy/advisories/omarchy.advisories.json; do
-    if [[ -f $candidate ]]; then
+    /var/lib/omarchy/advisories \
+    /usr/share/omarchy/advisories; do
+    if [[ -d $candidate ]]; then
       SIDECAR=$candidate
       break
     fi
   done
 fi
 
-if [[ -z $SIDECAR || ! -f $SIDECAR ]]; then
-  echo "advisory sidecar not found; skipping CVE warnings (fail-open)" >&2
-  echo "advisory sidecar not found; skipping CVE warnings (fail-open)"
+if [[ -z $SIDECAR || ! -d $SIDECAR ]]; then
+  echo "advisory directory not found; skipping CVE warnings (fail-open)" >&2
+  echo "advisory directory not found; skipping CVE warnings (fail-open)"
   if (( FAIL_CLOSED )); then
     exit 2
   else
@@ -80,18 +80,18 @@ trap 'rm -f "$findings_json"' EXIT
 closed_hit=0
 while read -r name ver arch; do
   [[ -z ${name:-} ]] && continue
-  key="${name}:${ver}:${arch}"
-  row=$(jq -c --arg k "$key" '.advisories[$k] // null' "$SIDECAR")
-  if [[ $row == null ]]; then
+  file="$SIDECAR/${name}-${ver}-${arch}.advisory.json"
+  if [[ ! -f $file ]]; then
     closed_hit=1
     if (( !JSON )); then
-      echo "warning: no OPR advisory row for $key"
+      echo "warning: no OPR advisory file for ${name}-${ver}-${arch}"
     fi
     jq --arg pkg "$name" --arg ver "$ver" --arg arch "$arch" \
       '. + [{pkgname:$pkg, pkgver:$ver, arch:$arch, scan_status:"absent", cve_ids:[], cve_max_severity:"NONE"}]' \
       "$findings_json" >"$findings_json.new" && mv "$findings_json.new" "$findings_json"
     continue
   fi
+  row=$(jq -c '.' "$file")
   status=$(jq -r '.scan_status' <<<"$row")
   sev=$(jq -r '.cve_max_severity // "NONE"' <<<"$row")
   cves=$(jq -r '.cve_ids // [] | join(" ")' <<<"$row")
