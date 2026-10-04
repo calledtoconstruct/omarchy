@@ -13,3 +13,5 @@ Files:
 - `gpos-srg-v3r3-overlay.csv` — machine-readable rows for the same GPOS V-IDs
 - `gpos-cati-product-map.md` — CAT I Check/Fix map against NixOS, Ubuntu 24.04, and RHEL 9
 - `gpos-cati-product-map.csv` — the same map as IDs only
+
+`omarchy-gpos-overlay` reads this catalog and reports each row against a machine. It does not change `idle.lock`, sudo, or sshd. FIPS and NSA-approved crypto stay gaps in this slice.

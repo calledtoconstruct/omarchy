@@ -39,6 +39,8 @@ Hand this packet to an AO with an Omarchy **stable** image. It is vendor-produce
 
 CAT I Check/Fix against NixOS, Ubuntu 24.04, and RHEL 9 is in `gpos-cati-product-map.md`.
 
+`omarchy-gpos-overlay` prints `catalog` from this packet and `observed` from the machine. `--fail-on-gap` exits 2 when any observed row is a gap. The command only reads. A stock image still reports gaps for autologin, `omarchy-sudo-passwordless`, FIPS, and NSA-approved crypto.
+
 Related work on sibling branches:
 
 - `omarchy-profile-regulated` (corporate stream) sets `idle.lock` to 900 and refuses `omarchy-sudo-passwordless`.

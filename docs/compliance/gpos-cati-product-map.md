@@ -203,4 +203,4 @@ Vendor-supported version.
 
 ## How to use this with DISA
 
-Take `gpos-srg-v3r3-overlay.csv` plus this map. Check/Fix text is Omarchy-specific (pacman, SDDM, Hyprland lock, OPR sidecar). NixOS/Ubuntu/RHEL IDs are evidence that the same GPOS row is implementable. Submit via the [Vendor STIG Intent Form](https://forms.osi.apps.mil/r/pcgHzmn9KC) with a Department of War sponsor. Until DISA publishes a product STIG, this remains an overlay.
+Take `gpos-srg-v3r3-overlay.csv` plus this map. Check/Fix text is Omarchy-specific (pacman, SDDM, Hyprland lock, OPR sidecar). NixOS/Ubuntu/RHEL IDs are evidence that the same GPOS row is implementable. `omarchy-gpos-overlay` is the read-only machine report for those checks. Submit via the [Vendor STIG Intent Form](https://forms.osi.apps.mil/r/pcgHzmn9KC) with a Department of War sponsor. Until DISA publishes a product STIG, this remains an overlay.

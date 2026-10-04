@@ -1,0 +1,432 @@
+#!/bin/bash
+
+# omarchy:summary=Report this machine against the GPOS SRG overlay. Read only.
+# omarchy:args=[--json] [--root DIR] [--catalog PATH] [--shell-json PATH] [--fail-on-gap]
+
+set -euo pipefail
+
+ROOT_FS=/
+JSON=0
+FAIL_ON_GAP=0
+CATALOG=""
+SHELL_JSON=""
+
+usage() {
+  echo "Usage: omarchy-gpos-overlay [--json] [--root DIR] [--catalog PATH] [--shell-json PATH] [--fail-on-gap]"
+}
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --json)
+    JSON=1
+    shift
+    ;;
+  --fail-on-gap)
+    FAIL_ON_GAP=1
+    shift
+    ;;
+  --root)
+    ROOT_FS=$2
+    shift 2
+    ;;
+  --catalog)
+    CATALOG=$2
+    shift 2
+    ;;
+  --shell-json)
+    SHELL_JSON=$2
+    shift 2
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "Unknown option: $1" >&2
+    usage >&2
+    exit 1
+    ;;
+  esac
+done
+
+if [[ $ROOT_FS != / ]]; then
+  ROOT_FS=${ROOT_FS%/}
+fi
+[[ -d $ROOT_FS ]] || {
+  echo "omarchy-gpos-overlay: root is not a directory: $ROOT_FS" >&2
+  exit 1
+}
+
+if [[ -z $CATALOG ]]; then
+  CATALOG=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../docs/compliance" && pwd)/gpos-srg-v3r3-overlay.csv
+fi
+[[ -f $CATALOG ]] || {
+  echo "omarchy-gpos-overlay: catalog not found: $CATALOG" >&2
+  exit 1
+}
+
+if [[ -z $SHELL_JSON ]]; then
+  if [[ $ROOT_FS == / ]]; then
+    SHELL_JSON=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json
+  else
+    SHELL_JSON=$ROOT_FS/config/omarchy/shell.json
+  fi
+fi
+
+command -v jq >/dev/null || {
+  echo "omarchy-gpos-overlay: jq is required" >&2
+  exit 1
+}
+
+under() {
+  local rel=${1#/}
+  if [[ $ROOT_FS == / ]]; then
+    printf '/%s' "$rel"
+  else
+    printf '%s/%s' "$ROOT_FS" "$rel"
+  fi
+}
+
+catalog_status() {
+  awk -F, -v id="$1" 'NR > 1 && $1 == id { print $4; exit }' "$CATALOG"
+}
+
+pkg_installed() {
+  local name=$1
+  local dir match
+  dir=$(under var/lib/pacman/local)
+  [[ -d $dir ]] || return 1
+  shopt -s nullglob
+  local matches=("$dir/${name}-"*)
+  shopt -u nullglob
+  [[ ${#matches[@]} -gt 0 ]]
+}
+
+file_has_key() {
+  local key=$1
+  local file
+  shopt -s nullglob
+  local files=("$(under etc/ssh/sshd_config)")
+  files+=("$(under etc/ssh/sshd_config.d)/"*.conf)
+  shopt -u nullglob
+  for file in "${files[@]}"; do
+    [[ -f $file ]] || continue
+    grep -Eq "^[[:space:]]*${key}[[:space:]]+" "$file" && return 0
+  done
+  return 1
+}
+
+unit_present() {
+  local path=$1
+  [[ -e $path || -L $path ]]
+}
+
+echo "GPOS SRG V3R3 overlay report. This is not a STIG." >&2
+
+sshd_on=0
+if unit_present "$(under etc/systemd/system/multi-user.target.wants/sshd.service)" ||
+  unit_present "$(under etc/systemd/system/sockets.target.wants/sshd.socket)"; then
+  sshd_on=1
+fi
+ciphers_pinned=0
+macs_pinned=0
+kex_pinned=0
+file_has_key Ciphers && ciphers_pinned=1
+file_has_key MACs && macs_pinned=1
+file_has_key KexAlgorithms && kex_pinned=1
+
+yescrypt=0
+if [[ -f $(under etc/login.defs) ]] && grep -Eqi '^[[:space:]]*ENCRYPT_METHOD[[:space:]]+yescrypt([[:space:]]|$)' "$(under etc/login.defs)"; then
+  yescrypt=1
+elif [[ -f $(under etc/pam.d/system-auth) ]] && grep -q 'yescrypt' "$(under etc/pam.d/system-auth)"; then
+  yescrypt=1
+fi
+
+cleartext_server=0
+for name in vsftpd proftpd pure-ftpd tftp-hpa telnetd telnet-server; do
+  if pkg_installed "$name"; then
+    cleartext_server=1
+  fi
+done
+
+luks=0
+crypttab=$(under etc/crypttab)
+if [[ -f $crypttab ]] && grep -Eqi '^[[:space:]]*[^#].*luks' "$crypttab"; then
+  luks=1
+fi
+
+# A kernel flag is not a validated module. These two rows stay gaps in this slice.
+fips_flag=0
+fips_file=$(under proc/sys/crypto/fips_enabled)
+if [[ -f $fips_file ]] && [[ $(tr -d '[:space:]' <"$fips_file") == 1 ]]; then
+  fips_flag=1
+fi
+fips_note="FIPS is out of this slice"
+nsa_note="NSA-approved crypto is out of this slice"
+if [[ $fips_flag -eq 1 ]]; then
+  fips_note="$fips_note; kernel fips flag is on"
+  nsa_note="$nsa_note; kernel fips flag is on"
+fi
+
+passwordless_dropin=0
+sudoers=$(under etc/sudoers.d)
+if [[ -d $sudoers ]] && grep -R -E -q 'NOPASSWD:[[:space:]]*ALL' "$sudoers"; then
+  passwordless_dropin=1
+fi
+passwordless_cmd=0
+if [[ $ROOT_FS == / ]]; then
+  command -v omarchy-sudo-passwordless >/dev/null 2>&1 && passwordless_cmd=1
+elif [[ -e $(under usr/bin/omarchy-sudo-passwordless) || -e $(under usr/share/omarchy/bin/omarchy-sudo-passwordless) ]]; then
+  passwordless_cmd=1
+fi
+
+update_cmd=0
+if [[ $ROOT_FS == / ]]; then
+  command -v omarchy-update >/dev/null 2>&1 && update_cmd=1
+elif [[ -e $(under usr/bin/omarchy-update) || -e $(under usr/share/omarchy/bin/omarchy-update) ]]; then
+  update_cmd=1
+fi
+
+pacman_conf=$(under etc/pacman.conf)
+sig_required=0
+channel=unknown
+http_server=0
+server_lines=0
+if [[ -f $pacman_conf ]]; then
+  sig_line=$(awk '
+    /^\[/ { in_opt = (tolower($0) ~ /^\[options\]/) }
+    in_opt && $0 ~ /^[[:space:]]*SigLevel[[:space:]]*=/ { line = $0 }
+    END { print line }
+  ' "$pacman_conf")
+  stripped=${sig_line//DatabaseOptional/}
+  if [[ $stripped == *Required* && $stripped != *Optional* && $stripped != *Never* && $stripped != *TrustAll* ]]; then
+    sig_required=1
+  fi
+  while IFS= read -r server; do
+    [[ -z $server ]] && continue
+    server_lines=1
+    if [[ $server =~ ^[[:space:]]*Server[[:space:]]*=[[:space:]]*http:// ]]; then
+      http_server=1
+    fi
+    if [[ $server =~ pkgs\.omarchy\.org/([^/]+)/ ]]; then
+      channel=${BASH_REMATCH[1]}
+    fi
+  done < <(grep -E '^[[:space:]]*Server[[:space:]]*=' "$pacman_conf" || true)
+fi
+
+bluez=0
+if pkg_installed bluez || pkg_installed blueman; then
+  bluez=1
+fi
+
+autologin=0
+if [[ -e $(under etc/pam.d/sddm-autologin) ]]; then
+  autologin=1
+else
+  shopt -s nullglob
+  sddm_files=("$(under etc/sddm.conf)")
+  sddm_files+=("$(under etc/sddm.conf.d)/"*)
+  shopt -u nullglob
+  for file in "${sddm_files[@]}"; do
+    [[ -f $file ]] || continue
+    if grep -Eq '^[[:space:]]*AutologinEnable[[:space:]]*=[[:space:]]*true([[:space:]]|$)' "$file" ||
+      grep -Eq '^[[:space:]]*AutologinUser[[:space:]]*=[[:space:]]*[^[:space:]#]' "$file"; then
+      autologin=1
+    fi
+  done
+fi
+
+lock_ok=0
+lock_note="idle.lock is missing"
+if [[ -f $SHELL_JSON ]]; then
+  lock_value=$(jq -er '.idle.lock // empty' "$SHELL_JSON" 2>/dev/null || true)
+  if [[ $lock_value =~ ^[0-9]+$ ]]; then
+    lock_note="idle.lock is ${lock_value} seconds"
+    if [[ $lock_value -gt 0 && $lock_value -le 900 ]]; then
+      lock_ok=1
+    fi
+  fi
+fi
+
+if [[ $sshd_on -eq 0 ]]; then
+  note_603="sshd not enabled; ciphers not pinned"
+  obs_603=partial
+  note_669="sshd not enabled; MACs not pinned"
+  obs_669=partial
+elif [[ $ciphers_pinned -eq 1 && $macs_pinned -eq 1 && $kex_pinned -eq 1 ]]; then
+  note_603="sshd ciphers pinned; not a DoD suite check"
+  obs_603=partial
+  note_669="MACs pinned; not a DoD suite check"
+  obs_669=partial
+elif [[ $ciphers_pinned -eq 0 ]]; then
+  note_603="sshd enabled without pinned Ciphers"
+  obs_603=gap
+  if [[ $macs_pinned -eq 1 ]]; then
+    note_669="MACs pinned; not a DoD suite check"
+    obs_669=partial
+  else
+    note_669="sshd enabled without pinned MACs"
+    obs_669=gap
+  fi
+else
+  note_603="sshd ciphers pinned; not a DoD suite check"
+  obs_603=partial
+  note_669="sshd enabled without pinned MACs"
+  obs_669=gap
+fi
+
+if [[ $yescrypt -eq 1 ]]; then
+  obs_629=implemented
+  note_629=yescrypt
+else
+  obs_629=gap
+  note_629="password hash is not yescrypt"
+fi
+
+if [[ $cleartext_server -eq 1 ]]; then
+  obs_630=gap
+  note_630="cleartext remote login server installed"
+else
+  obs_630=partial
+  note_630="telnet and ftp servers not installed"
+fi
+
+if [[ $passwordless_dropin -eq 1 ]]; then
+  obs_695=gap
+  note_695="NOPASSWD ALL drop-in is present"
+elif [[ $passwordless_cmd -eq 1 ]]; then
+  obs_695=gap
+  note_695="omarchy-sudo-passwordless is on this image"
+else
+  obs_695=partial
+  note_695="no passwordless sudo drop-in"
+fi
+
+if [[ $sig_required -eq 1 ]]; then
+  obs_720=partial
+  note_720="package signatures required; AUR stays unsigned"
+else
+  obs_720=gap
+  note_720="pacman SigLevel does not require signatures"
+fi
+
+if [[ $luks -eq 1 ]]; then
+  obs_745=implemented
+  note_745="LUKS crypttab entry"
+else
+  obs_745=gap
+  note_745="no LUKS crypttab entry"
+fi
+
+if [[ $http_server -eq 1 ]]; then
+  obs_748=gap
+  note_748="pacman.conf has an http Server line"
+  obs_749=gap
+  note_749="pacman.conf has an http Server line"
+elif [[ $server_lines -eq 0 ]]; then
+  obs_748=partial
+  note_748="no Server line in pacman.conf"
+  obs_749=partial
+  note_749="PDS and DoD cipher pinning are absent"
+else
+  obs_748=partial
+  note_748="mirror Server lines use https; no host-wide policy"
+  obs_749=partial
+  note_749="PDS and DoD cipher pinning are absent"
+fi
+
+if [[ $autologin -eq 1 ]]; then
+  obs_782=gap
+  note_782="automatic logon configuration is present"
+else
+  obs_782=partial
+  note_782="no sddm autologin file in this root"
+fi
+
+if [[ $bluez -eq 1 ]]; then
+  obs_252688=gap
+  note_252688="bluez is installed"
+else
+  obs_252688=partial
+  note_252688="bluez is not installed"
+fi
+
+if [[ $update_cmd -eq 1 ]]; then
+  obs_259333=partial
+  note_259333="omarchy-update exists; no 30-day evidence"
+else
+  obs_259333=gap
+  note_259333="omarchy-update is missing"
+fi
+
+case $channel in
+stable)
+  obs_278977=partial
+  note_278977="channel is stable"
+  ;;
+*)
+  obs_278977=gap
+  note_278977="channel is ${channel}"
+  ;;
+esac
+
+if [[ $lock_ok -eq 1 ]]; then
+  obs_599=partial
+else
+  obs_599=gap
+fi
+
+gaps=0
+items=()
+emit() {
+  local id=$1 observed=$2 note=$3
+  local catalog
+  catalog=$(catalog_status "$id")
+  [[ -n $catalog ]] || {
+    echo "omarchy-gpos-overlay: catalog has no row for $id" >&2
+    exit 1
+  }
+  if [[ $observed == gap ]]; then
+    gaps=1
+  fi
+  if [[ $JSON -eq 1 ]]; then
+    items+=("$(jq -nc \
+      --arg vuln_id "$id" \
+      --arg catalog "$catalog" \
+      --arg observed "$observed" \
+      --arg note "$note" \
+      '{vuln_id:$vuln_id,catalog:$catalog,observed:$observed,note:$note}')")
+  else
+    printf '%s catalog=%s observed=%s %s\n' "$id" "$catalog" "$observed" "$note"
+  fi
+}
+
+emit V-203603 "$obs_603" "$note_603"
+emit V-203629 "$obs_629" "$note_629"
+emit V-203630 "$obs_630" "$note_630"
+emit V-203653 gap "MFA is not required for nonlocal maintenance"
+emit V-203669 "$obs_669" "$note_669"
+emit V-203682 gap "audit tool integrity is not measured"
+emit V-203695 "$obs_695" "$note_695"
+emit V-203720 "$obs_720" "$note_720"
+emit V-203736 partial "no separate maintenance-channel policy"
+emit V-203737 partial "no separate maintenance-channel policy"
+emit V-203739 gap "$nsa_note"
+emit V-203745 "$obs_745" "$note_745"
+emit V-203746 "$obs_745" "$note_745"
+emit V-203748 "$obs_748" "$note_748"
+emit V-203749 "$obs_749" "$note_749"
+emit V-203776 gap "$fips_note"
+emit V-203782 "$obs_782" "$note_782"
+emit V-252688 "$obs_252688" "$note_252688"
+emit V-259333 "$obs_259333" "$note_259333"
+emit V-278977 "$obs_278977" "$note_278977"
+emit V-203599 "$obs_599" "$lock_note"
+
+if [[ $JSON -eq 1 ]]; then
+  printf '%s\n' "${items[@]}" | jq -s '.'
+fi
+
+if [[ $FAIL_ON_GAP -eq 1 && $gaps -eq 1 ]]; then
+  exit 2
+fi
