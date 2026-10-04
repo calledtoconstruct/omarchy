@@ -11,7 +11,7 @@ JSON=0
 FAIL_CLOSED=0
 
 usage() {
-  echo "Usage: omarchy-risk-report [--sidecar PATH] [--installed-file PATH] [--arch-audit-file PATH] [--json] [--fail-closed]"
+  echo "Usage: omarchy-risk-report [--sidecar DIR] [--installed-file PATH] [--arch-audit-file PATH] [--json] [--fail-closed]"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -58,9 +58,9 @@ fi
 
 if [[ -z $SIDECAR ]]; then
   for candidate in \
-    /var/lib/pacman/sync/omarchy.advisories.json \
-    /usr/share/omarchy/advisories/omarchy.advisories.json; do
-    if [[ -f $candidate ]]; then
+    /var/lib/omarchy/advisories \
+    /usr/share/omarchy/advisories; do
+    if [[ -d $candidate ]]; then
       SIDECAR=$candidate
       break
     fi
@@ -68,7 +68,7 @@ if [[ -z $SIDECAR ]]; then
 fi
 
 sidecar_missing=0
-if [[ -z $SIDECAR || ! -f $SIDECAR ]]; then
+if [[ -z $SIDECAR || ! -d $SIDECAR ]]; then
   sidecar_missing=1
 fi
 
@@ -89,8 +89,12 @@ fi
 if (( sidecar_missing == 0 )); then
   while read -r name ver arch; do
     [[ -z ${name:-} ]] && continue
-    key="${name}:${ver}:${arch}"
-    row=$(jq -c --arg k "$key" '.advisories[$k] // null' "$SIDECAR")
+    file="$SIDECAR/${name}-${ver}-${arch}.advisory.json"
+    if [[ ! -f $file ]]; then
+      row=null
+    else
+      row=$(jq -c '.' "$file")
+    fi
     if [[ $row == null ]]; then
       row=$(jq -nc --arg pkg "$name" --arg ver "$ver" --arg arch "$arch" \
         '{pkgname:$pkg, pkgver:$ver, arch:$arch, scan_status:"absent", cve_ids:[], cve_max_severity:"NONE"}')
@@ -127,7 +131,7 @@ if (( JSON == 1 )); then
 else
   echo "profile=$profile closed=$closed"
   if (( sidecar_missing == 1 )); then
-    echo "advisory sidecar not found"
+    echo "advisory directory not found"
   fi
   jq -r '
     .opr[]
