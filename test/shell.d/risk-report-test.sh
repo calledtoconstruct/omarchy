@@ -12,7 +12,7 @@ export HOME="$home"
 export OMARCHY_CONFIG_HOME="$home/.config/omarchy"
 mkdir -p "$OMARCHY_CONFIG_HOME"
 
-sidecar="$ROOT/test/shell.d/fixtures/advisories/omarchy.advisories.json"
+sidecar="$ROOT/test/shell.d/fixtures/advisories"
 installed=$(mktemp)
 audit=$(mktemp)
 cat >"$installed" <<'EOF'
