@@ -30,8 +30,8 @@ while (( $# > 0 )); do
 Usage: omarchy bundle remove <id> [--dry-run] [--yes]
 
 Drops this bundle's ownership. A package, plugin, skill link, or config
-file is removed only when no other bundle owns it and it was not yours
-before any bundle.
+file is removed only when no other bundle owns it, it was not yours
+before any bundle, and you did not change it after install.
 USAGE
     exit 0
     ;;
@@ -135,17 +135,35 @@ done
 
 jq -c --arg id "$bundle_id" '
   .configs | to_entries[] | select(.value.owners | index($id) != null) |
-  {target: .key, user_owned: .value.user_owned, owners: (.value.owners | length)}
+  {
+    target: .key,
+    user_owned: .value.user_owned,
+    owners: (.value.owners | length),
+    sha256: (.value.sha256 // "")
+  }
 ' <<<"$ledger" | while IFS= read -r row; do
   target=$(jq -r '.target' <<<"$row")
   user_owned=$(jq -r '.user_owned' <<<"$row")
   owners=$(jq -r '.owners' <<<"$row")
+  expected=$(jq -r '.sha256' <<<"$row")
   if (( owners > 1 )); then
     action=keep
     note="kept, still owned by another bundle"
   elif [[ $user_owned == true ]]; then
     action=release
     note="kept, yours"
+  elif [[ -L $target || ( -e $target && ! -f $target ) ]]; then
+    action=release
+    note="kept, you changed it"
+  elif [[ -f $target ]]; then
+    current=$(bundle_file_sha256 "$target")
+    if [[ -n $expected && $current == "$expected" ]]; then
+      action=drop
+      note="remove"
+    else
+      action=release
+      note="kept, you changed it"
+    fi
   else
     action=drop
     note="remove"

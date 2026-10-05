@@ -131,6 +131,16 @@ calls_have() {
   [[ -f $home/calls.log ]] && grep -qxF -- "$expected" "$home/calls.log"
 }
 
+write_config_bundle() {
+  local dir="$1" id="$2" content="${3:-from-bundle}"
+  write_bundle "$dir" "$id" "$id" '[]'
+  mkdir -p "$dir/config"
+  printf '%s\n' "$content" >"$dir/config/note.txt"
+  jq '.config = [{"source":"config/note.txt","target":"~/.config/note.txt"}]' \
+    "$dir/bundle.json" >"$dir/bundle.json.next"
+  mv "$dir/bundle.json.next" "$dir/bundle.json"
+}
+
 # 1. Shared package stays until both bundles are gone.
 home=$(new_home shared)
 write_bundle "$home/a" shared-a "Shared A" '["sharedpkg","only-a"]'
@@ -554,3 +564,84 @@ fi
 grep -q 'registry not available yet' <<<"$output" || fail "registry source says the registry is not available" "$output"
 [[ ! -e $home/.local/state/omarchy/bundles/ledger.json ]] || fail "registry source wrote a ledger"
 pass "publisher/name@version stops because the registry is not available yet"
+
+# Config files the bundle copied are removed when they still match. A file the
+# user changed after install is kept. Reinstall leaves that file in place.
+# Reset moves it aside and writes the bundle's copy.
+home=$(new_home config-unmodified)
+write_config_bundle "$home/cfg-bundle" cfg-bundle "from-bundle"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/cfg-bundle" >/dev/null
+[[ $(<"$home/.config/note.txt") == from-bundle ]] || fail "config file was copied"
+jq -e '.configs["'"$home"'/.config/note.txt"].sha256 | test("^[a-f0-9]{64}$")' \
+  "$home/.local/state/omarchy/bundles/ledger.json" >/dev/null \
+  || fail "ledger records a checksum for a copied config" "$(cat "$home/.local/state/omarchy/bundles/ledger.json")"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-remove" --yes cfg-bundle >/dev/null
+[[ ! -e $home/.config/note.txt ]] || fail "an unmodified config file is removed with the bundle"
+pass "an unmodified copied config is removed"
+
+home=$(new_home config-modified)
+write_config_bundle "$home/cfg-bundle" cfg-bundle "from-bundle"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/cfg-bundle" >/dev/null
+printf 'user-edit\n' >"$home/.config/note.txt"
+output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-remove" --yes cfg-bundle)
+[[ $(<"$home/.config/note.txt") == user-edit ]] || fail "a config file changed after install is kept"
+grep -q 'kept, you changed it' <<<"$output" || fail "remove plan says the changed config is kept" "$output"
+pass "a config file changed after install is kept"
+
+home=$(new_home config-reinstall)
+write_config_bundle "$home/cfg-v1" cfg-bundle "from-bundle"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/cfg-v1" >/dev/null
+printf 'user-edit\n' >"$home/.config/note.txt"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-remove" --yes cfg-bundle >/dev/null
+write_config_bundle "$home/cfg-v2" cfg-bundle "maintainer-v2"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/cfg-v2" >/dev/null
+[[ $(<"$home/.config/note.txt") == user-edit ]] || fail "reinstall leaves the user's config in place"
+jq -e '.configs["'"$home"'/.config/note.txt"].user_owned == true' \
+  "$home/.local/state/omarchy/bundles/ledger.json" >/dev/null \
+  || fail "reinstall records a retained config as the user's" "$(cat "$home/.local/state/omarchy/bundles/ledger.json")"
+output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-reset" --yes cfg-bundle)
+[[ $(<"$home/.config/note.txt") == maintainer-v2 ]] || fail "reset writes the installed bundle's config"
+shopt -s nullglob
+backups=("$home/.config/note.txt.bak."*)
+shopt -u nullglob
+(( ${#backups[@]} == 1 )) || fail "reset moves the user's config aside" "$(ls -la "$home/.config")"
+[[ $(<"${backups[0]}") == user-edit ]] || fail "the reset backup holds the user's config"
+grep -q 'note.txt.bak.' <<<"$output" || fail "reset plan names the backup" "$output"
+jq -e '.configs["'"$home"'/.config/note.txt"].user_owned == false and (.configs["'"$home"'/.config/note.txt"].sha256 | test("^[a-f0-9]{64}$"))' \
+  "$home/.local/state/omarchy/bundles/ledger.json" >/dev/null \
+  || fail "reset records the file as the bundle's copy" "$(cat "$home/.local/state/omarchy/bundles/ledger.json")"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-remove" --yes cfg-bundle >/dev/null
+[[ ! -e $home/.config/note.txt ]] || fail "remove after reset deletes the unmodified maintainer copy"
+[[ -f ${backups[0]} ]] || fail "the reset backup survives bundle removal"
+pass "reset replaces a retained config and later remove deletes the bundle copy"
+
+home=$(new_home config-reset-same)
+write_config_bundle "$home/cfg-bundle" cfg-bundle "from-bundle"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/cfg-bundle" >/dev/null
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-reset" --yes cfg-bundle >/dev/null
+shopt -s nullglob
+backups=("$home/.config/note.txt.bak."*)
+shopt -u nullglob
+(( ${#backups[@]} == 0 )) || fail "reset does not back up a file that already matches" "$(ls -la "$home/.config")"
+[[ $(<"$home/.config/note.txt") == from-bundle ]] || fail "reset leaves a matching config in place"
+pass "reset skips a config that already matches the bundle"
+
+home=$(new_home config-reset-missing)
+if output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-reset" --yes missing-bundle 2>&1); then
+  fail "reset accepted a bundle that is not installed" "$output"
+fi
+grep -q "is not installed" <<<"$output" || fail "reset names a missing bundle" "$output"
+pass "reset refuses a bundle that is not installed"
+
+home=$(new_home config-reset-dry)
+write_config_bundle "$home/cfg-bundle" cfg-bundle "from-bundle"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/cfg-bundle" >/dev/null
+printf 'user-edit\n' >"$home/.config/note.txt"
+output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-reset" --dry-run --yes cfg-bundle)
+[[ $(<"$home/.config/note.txt") == user-edit ]] || fail "dry-run reset leaves the user's config"
+shopt -s nullglob
+backups=("$home/.config/note.txt.bak."*)
+shopt -u nullglob
+(( ${#backups[@]} == 0 )) || fail "dry-run reset does not write a backup" "$(ls -la "$home/.config")"
+grep -q 'Dry run: nothing was reset.' <<<"$output" || fail "dry-run reset says nothing was reset" "$output"
+pass "dry-run reset changes nothing"
