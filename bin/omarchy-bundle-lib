@@ -153,6 +153,13 @@ bundle_tree_sha256() {
   printf '%s\n' "$hash"
 }
 
+bundle_file_sha256() {
+  local file="$1" hash
+  hash=$(sha256sum -- "$file" | awk '{print $1}')
+  [[ $hash =~ ^[a-f0-9]{64}$ ]] || bundle_fail "could not checksum $file"
+  printf '%s\n' "$hash"
+}
+
 bundle_copy_tree() {
   local src="$1" dest="$2" parent stage
   parent=$(dirname -- "$dest")

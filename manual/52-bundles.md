@@ -6,6 +6,7 @@ A bundle is a folder of data that describes one activity: the Arch packages to i
 omarchy bundle add ./web-developer
 omarchy bundle list
 omarchy bundle remove web-developer
+omarchy bundle reset web-developer
 ```
 
 `omarchy bundle add` takes a local folder or a git URL. A git URL is a development source: the command prints a development/unsafe source warning, then clones and validates. It is not a reviewed release. A name shaped like `publisher/name` or `publisher/name@version` is reserved for the plugin registry. The command recognizes it and stops with "registry not available yet". Signing, revocation, publishing, and search belong to that registry and are not part of this command.
@@ -73,9 +74,11 @@ Each installed bundle has a receipt with the same field names as a registry inst
 | `commit` | Git commit, when the source was a git URL. Otherwise null |
 | `installed_at` | UTC time the bundle was installed |
 
-The ledger also records, for every package, plugin, skill link, and config file, which bundle ids own it and whether it was yours before any bundle owned it. A package counts as yours when it was already listed by `pacman -Qqe` (explicitly installed, not pulled in as a dependency). A file or link counts as yours when it already existed.
+The ledger also records, for every package, plugin, skill link, and config file, which bundle ids own it and whether it was yours before any bundle owned it. A package counts as yours when it was already listed by `pacman -Qqe` (explicitly installed, not pulled in as a dependency). A file or link counts as yours when it already existed. A config file the bundle copies is checksummed at install. Removing it later compares that checksum to the file on disk.
 
-Installing prints a plan of what is new and what is already present, then asks. It installs missing packages first, then plugins, then skill links and config files. Removing drops this bundle's ownership, prints a plan, and asks. Something is deleted only when no remaining bundle owns it and it was not yours. Packages are removed with `omarchy-pkg-drop` after that check. Plugins are removed with `omarchy-plugin-remove` after that check. Your own packages and files stay.
+Installing prints a plan of what is new and what is already present, then asks. It installs missing packages first, then plugins, then skill links and config files. Removing drops this bundle's ownership, prints a plan, and asks. Something is deleted only when no remaining bundle owns it and it was not yours. A copied config file is also left in place when the bytes no longer match the checksum, which is how an edit you made after install survives remove. Packages are removed with `omarchy-pkg-drop` after that check. Plugins are removed with `omarchy-plugin-remove` after that check. Your own packages and files stay.
+
+A later `omarchy bundle add` of the same bundle sees that live file and leaves it. `omarchy bundle reset <id>` writes the config files from the installed bundle over those targets. A live file that differs is moved to `<target>.bak.<timestamp>` first. After a reset, the live file is the bundle's copy again, so a later remove will delete it if you have not edited it.
 
 When `introduction` is set, a successful install sends a notification. The headline is `Bundle <name> installed` and the body is `Click to see the introduction.` The click opens that file in [Omawrite](https://github.com/omacom-io/omawrite), floating in the center of the screen. Install does not run the file.
 

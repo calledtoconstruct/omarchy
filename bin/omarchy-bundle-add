@@ -284,11 +284,15 @@ while IFS= read -r entry; do
     user_owned=false
     note="copy"
   fi
+  sha256=""
+  if [[ $action == copy ]]; then
+    sha256=$(bundle_file_sha256 "$bundle_dir/$source_rel")
+  fi
   # shellcheck disable=SC2016
   append_plan \
     --arg source "$source_rel" --arg target "$target" --arg action "$action" --arg note "$note" \
-    --argjson user_owned "$user_owned" \
-    '.configs += [{source:$source, target:$target, action:$action, note:$note, user_owned:$user_owned}]'
+    --arg sha256 "$sha256" --argjson user_owned "$user_owned" \
+    '.configs += [{source:$source, target:$target, action:$action, note:$note, sha256:$sha256, user_owned:$user_owned}]'
 done < <(jq -c '.config[]' "$bundle_dir/bundle.json")
 
 echo "Bundle: $name ($id) $version"
@@ -437,7 +441,12 @@ updated=$(jq -c \
       if .configs[$item.target] then
         .configs[$item.target].owners = ((.configs[$item.target].owners + [$id]) | unique)
       else
-        .configs[$item.target] = {owners: [$id], user_owned: $item.user_owned, source: $item.source}
+        .configs[$item.target] = {
+          owners: [$id],
+          user_owned: $item.user_owned,
+          source: $item.source,
+          sha256: (if $item.sha256 == "" then null else $item.sha256 end)
+        }
       end)
   ' <<<"$ledger")
 bundle_ledger_write "$updated"
