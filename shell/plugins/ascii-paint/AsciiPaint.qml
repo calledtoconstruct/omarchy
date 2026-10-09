@@ -136,7 +136,12 @@ Item {
   }
 
   function pressKey(event) {
-    if (confirmDialog.handleKey(event)) {
+    // Keep (K) and Discard (D) belong to this painter. While the dialog is
+    // open, every key stops here so a shortcut cannot change the tool.
+    if (confirmDialog.opened) {
+      if (event.key === Qt.Key_K) confirmDialog.canceled()
+      else if (event.key === Qt.Key_D) confirmDialog.confirmed()
+      else confirmDialog.handleKey(event)
       event.accepted = true
       return
     }
@@ -1325,8 +1330,6 @@ Item {
         message: "Discard unsaved paint?"
         cancelText: "Keep (K)"
         confirmText: "Discard (D)"
-        cancelKey: Qt.Key_K
-        confirmKey: Qt.Key_D
         background: root.background
         foreground: root.foreground
         scrim: Util.alpha(root.background, 0.72)

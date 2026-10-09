@@ -73,10 +73,8 @@ BorderSurface {
   implicitWidth: row.implicitWidth + horizontalPadding * 2 + _reservedBorderLeft + _reservedBorderRight
   implicitHeight: row.implicitHeight + verticalPadding * 2 + _reservedBorderTop + _reservedBorderBottom
   radius: Style.cornerRadius
-  opacity: enabled ? 1 : 0.4
 
-  readonly property bool hot: hover.hovered || hasCursor
-  readonly property bool pressed: tapLeft.pressed || tapRight.pressed
+  readonly property bool hot: mouseArea.containsMouse || hasCursor
   readonly property bool _showFocusRing: focusable && activeFocus
   readonly property color _selectedColor: Style.selectedStateColor(root.foreground, root.accent)
   readonly property var _tooltipBorderSpec: Border.localOrSurfaceSpec("tooltip", "border", root.tooltipBorder, Color.tooltip.border, Math.max(1, Style.normalBorderWidth))
@@ -111,7 +109,7 @@ BorderSurface {
     : bordered                 ? _normalBorderSpec
     : Border.none()
 
-  color: root.pressed ? Style.pressedFillFor(root.foreground, root.accent)
+  color: mouseArea.pressed ? Style.pressedFillFor(root.foreground, root.accent)
     : _showFocusRing       ? Style.focusFillFor(root.foreground, root.accent)
     : hot                  ? Style.hoverFillFor(root.foreground, root.accent)
     : selected             ? Style.selectedFillFor(root.foreground, root.accent)
@@ -130,7 +128,7 @@ BorderSurface {
   Behavior on color { ColorAnimation { duration: 120 } }
 
   ToolTip {
-    visible: root.tooltipText !== "" && hover.hovered && root.enabled
+    visible: root.tooltipText !== "" && mouseArea.containsMouse
     text: root.tooltipText
     delay: 400
     padding: 0
@@ -192,36 +190,20 @@ BorderSurface {
     }
   }
 
-  // Handlers target this item's full bounds, including padding between
-  // the border and the label. A child MouseArea can miss that ring and
-  // let the press fall through to whatever is stacked underneath.
-  HoverHandler {
-    id: hover
-    enabled: root.enabled
+  MouseArea {
+    id: mouseArea
+    anchors.fill: parent
+    hoverEnabled: true
     cursorShape: Qt.PointingHandCursor
-    onHoveredChanged: root.hovered(hovered)
-  }
-
-  TapHandler {
-    id: tapLeft
-    enabled: root.enabled
-    acceptedButtons: Qt.LeftButton
-    gesturePolicy: TapHandler.ReleaseWithinBounds
-    grabPermissions: PointerHandler.TakeOverForbidden
-    dragThreshold: Style.space(16)
-    onTapped: {
+    acceptedButtons: Qt.LeftButton | Qt.RightButton
+    onClicked: function(mouse) {
       if (root.focusable) root.forceActiveFocus()
-      root.clicked()
+      if (mouse.button === Qt.RightButton) root.rightClicked()
+      else root.clicked()
     }
   }
 
-  TapHandler {
-    id: tapRight
-    enabled: root.enabled
-    acceptedButtons: Qt.RightButton
-    gesturePolicy: TapHandler.ReleaseWithinBounds
-    grabPermissions: PointerHandler.TakeOverForbidden
-    dragThreshold: Style.space(16)
-    onTapped: root.rightClicked()
+  HoverHandler {
+    onHoveredChanged: root.hovered(hovered)
   }
 }
