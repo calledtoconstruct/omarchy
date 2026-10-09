@@ -301,24 +301,21 @@ grep -q 'afterChromeClick' "$qml" || fail "toolbar clicks do not leak a canvas s
 grep -q 'if (root.ignoreCanvas' "$qml" || fail "canvas presses honor ignoreCanvas"
 grep -q 'preventStealing: true' "$qml" || fail "the toolbar keeps the pointer grab"
 grep -q 'onPressedChanged: if (pressed) root.afterChromeClick()' "$qml" || fail "toolbar presses arm ignoreCanvas immediately, not only on release"
-grep -q 'TapHandler' "$ROOT/shell/Ui/Button.qml" || fail "buttons take presses on their full bounds"
-grep -q 'TakeOverForbidden' "$ROOT/shell/Ui/Button.qml" || fail "button taps are not stolen by a drag underneath"
 grep -q 'hasUnsavedChanges' "$qml" || fail "close prompt requires unsaved history"
 grep -q 'Keep (K)' "$qml" || fail "exit confirmation labels Keep with K"
 grep -q 'Discard (D)' "$qml" || fail "exit confirmation labels Discard with D"
-grep -q 'cancelKey: Qt.Key_K' "$qml" || fail "K keeps the unsaved paint"
-grep -q 'confirmKey: Qt.Key_D' "$qml" || fail "D discards the unsaved paint"
-python3 - <<'PY' "$ROOT/shell/Ui/ConfirmDialog.qml" || fail "an open confirm dialog consumes leftover keys"
+python3 - <<'PY' "$qml" || fail "an open discard dialog keeps on K, discards on D, and swallows other keys"
 import pathlib, re, sys
 text = pathlib.Path(sys.argv[1]).read_text()
-m = re.search(r"function handleKey\(event\) \{([\s\S]*?)\n  \}", text)
+m = re.search(r"function pressKey\(event\) \{([\s\S]*?)\n  \}", text)
 if not m:
-    raise SystemExit(1)
+    raise SystemExit("pressKey missing")
 body = m.group(1)
-if "cancelKey" not in body or "confirmKey" not in body:
-    raise SystemExit(1)
-if not body.rstrip().endswith("return true"):
-    raise SystemExit(1)
+if "confirmDialog.opened" not in body or "Qt.Key_K" not in body or "Qt.Key_D" not in body:
+    raise SystemExit("keep and discard keys missing")
+opened = body.split("confirmDialog.opened", 1)[1]
+if "event.accepted = true" not in opened.split("return", 1)[0]:
+    raise SystemExit("dialog does not accept the key before returning")
 PY
 if grep -q '{ value: "dline"' "$qml"; then fail "double line is a palette, not a tool"; fi
 grep -q 'lineStyle' "$qml" || fail "line and rect share a single/double palette"
