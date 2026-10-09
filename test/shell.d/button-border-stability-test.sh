@@ -15,6 +15,43 @@ assert(
   !/implicitWidth:[^\n]*\bborderLeft\b/.test(buttonQml) && !/implicitHeight:[^\n]*\bborderTop\b/.test(buttonQml),
   'Button implicit size does not depend on current hover/focus border'
 )
+
+assert(
+  /TapHandler/.test(buttonQml),
+  'Button presses cover the full control bounds'
+)
+
+assert(
+  /grabPermissions:\s*PointerHandler\.TakeOverForbidden/.test(buttonQml),
+  'Button taps keep the pointer grab through a small wiggle'
+)
+
+assert(
+  /dragThreshold:\s*(?:Style\.space\(\s*(1[0-9]|[2-9]\d|[1-9]\d{2,})\s*\)|[1-9]\d+)/.test(buttonQml),
+  'Button taps allow an explicit click wiggle before counting as a drag'
+)
+
+assert(
+  /opacity:\s*enabled \? 1 : 0\.4/.test(buttonQml),
+  'Disabled buttons dim'
+)
+
+const dialogQml = fs.readFileSync(path.join(root, 'shell/Ui/ConfirmDialog.qml'), 'utf8')
+const handleKey = dialogQml.match(/function handleKey\(event\) \{([\s\S]*?)\n  \}/)
+assert(handleKey, 'ConfirmDialog handles keys')
+const handleBody = handleKey[1]
+assert(
+  handleBody.includes('cancelKey') && handleBody.includes('confirmKey'),
+  'ConfirmDialog accepts cancel and confirm shortcut keys'
+)
+assert(
+  handleBody.trimEnd().endsWith('return true'),
+  'An open confirm dialog consumes leftover keys'
+)
+assert(
+  /width:\s*Math\.max\(Style\.space\(88\),\s*label\.implicitWidth/.test(dialogQml),
+  'Confirm buttons grow to fit their labels'
+)
 JS
 
 require_compositor "Button hover geometry runtime test"
