@@ -29,12 +29,14 @@ mkdir -p "$HOME/.local/bin"
 
 # Append @latest only when the spec has no version. npm:@scope/name uses @
 # for the scope, so that form still needs @latest; tool@1.2.3 does not.
-# A spec with [options] takes it after them, as in http:muse[...]@latest.
-if [[ $package == *@latest || $package == npm:@*/*@* ]]; then
+# A spec with [options] takes it after them, as in http:muse[...]@latest, so
+# only what follows them can be a version; an @ inside them is part of a URL.
+version=${package##*]}
+if [[ $version == *@latest || $version == npm:@*/*@* ]]; then
   spec=$package
-elif [[ $package == npm:@*/* ]]; then
+elif [[ $version == npm:@*/* ]]; then
   spec="$package@latest"
-elif [[ $package == *@* ]]; then
+elif [[ $version == *@* ]]; then
   spec=$package
 else
   spec="$package@latest"

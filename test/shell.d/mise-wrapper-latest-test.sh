@@ -41,6 +41,16 @@ HOME="$home" PATH="$ROOT/bin:$PATH" "$ROOT/bin/omarchy-mise-install" \
   "http:muse[url=https://example.test/muse.sh,bin=muse]" muse
 grep -qF 'mise use -g --quiet "http:muse[url=https://example.test/muse.sh,bin=muse]@latest" || exit 1' "$home/.local/bin/muse" ||
   fail "mise wrapper appends @latest after a backend spec's options" "$(cat "$home/.local/bin/muse")"
+
+HOME="$home" PATH="$ROOT/bin:$PATH" "$ROOT/bin/omarchy-mise-install" \
+  "http:tool[url=https://example.test/@releases/tool.sh]" tool
+grep -qF 'mise use -g --quiet "http:tool[url=https://example.test/@releases/tool.sh]@latest" || exit 1' "$home/.local/bin/tool" ||
+  fail "mise wrapper does not read an @ inside the options as a version" "$(cat "$home/.local/bin/tool")"
+
+HOME="$home" PATH="$ROOT/bin:$PATH" "$ROOT/bin/omarchy-mise-install" \
+  "http:tool[url=https://example.test/@releases/tool.sh]@1.2.3" tool-pinned
+grep -qF 'mise use -g --quiet "http:tool[url=https://example.test/@releases/tool.sh]@1.2.3" || exit 1' "$home/.local/bin/tool-pinned" ||
+  fail "mise wrapper leaves a version after the options alone" "$(cat "$home/.local/bin/tool-pinned")"
 pass "mise wrapper appends @latest after a backend spec's options"
 
 migration="$ROOT/migrations/1789093830.sh"
