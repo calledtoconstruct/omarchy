@@ -41,21 +41,33 @@ cat >"$mock_bin/omarchy-hook" <<'SH'
 printf '%s\0' "$@" >>"${OMARCHY_TEST_HOOK_LOG:?}"
 SH
 
-cat >"$mock_bin/omarchy-notification-send" <<'SH'
+# Stub only the D-Bus transport, so the real omarchy-notification-send parses
+# the arguments. One NUL-delimited file per Notify call.
+cat >"$mock_bin/busctl" <<'SH'
 #!/bin/bash
-printf '%s\n' "$*" >>"${OMARCHY_TEST_NOTIFY_LOG:?}"
+calls=("${OMARCHY_TEST_BUSCTL_DIR:?}"/call-*)
+[[ -e ${calls[0]} ]] || calls=()
+printf '%s\0' "$@" >"$OMARCHY_TEST_BUSCTL_DIR/call-$((${#calls[@]} + 1))"
+echo "u 42"
+SH
+
+cat >"$mock_bin/notify-send" <<'SH'
+#!/bin/bash
+echo "notify-send was invoked" >"${OMARCHY_TEST_NOTIFY_TRIPWIRE:?}"
+exit 3
 SH
 
 chmod +x "$mock_bin"/*
 
 hook_log="$tmpdir/hook.log"
-notify_log="$tmpdir/notify.log"
+busctl_dir="$tmpdir/busctl-calls"
+tripwire="$tmpdir/notify-send-was-used"
 : >"$hook_log"
-: >"$notify_log"
+mkdir -p "$busctl_dir"
 
 output=$(
-  HOME="$home" OMARCHY_TEST_HOOK_LOG="$hook_log" OMARCHY_TEST_NOTIFY_LOG="$notify_log" \
-    PATH="$mock_bin:$ROOT/bin:$PATH" \
+  HOME="$home" OMARCHY_TEST_HOOK_LOG="$hook_log" OMARCHY_TEST_BUSCTL_DIR="$busctl_dir" \
+    OMARCHY_TEST_NOTIFY_TRIPWIRE="$tripwire" PATH="$mock_bin:$ROOT/bin:$PATH" \
     "$ROOT/bin/omarchy-font-set" "Fira Mono" 2>&1
 ) || fail "font set accepts a font name that contains a space" "$output"
 
@@ -63,14 +75,19 @@ output=$(
 [[ $output != *Usage:* ]] || fail "font set does not dump notification-send usage" "$output"
 pass "font set stays quiet for a multi-word font name"
 
-[[ -s $notify_log ]] || fail "font set notifies when Ghostty or Foot is running"
-grep -Fq 'You must restart Ghostty to see font change' "$notify_log" ||
-  fail "font set notifies Ghostty restart with the headline intact" "$(cat "$notify_log")"
-grep -Fq 'You must restart Foot to see font change' "$notify_log" ||
-  fail "font set notifies Foot restart with the headline intact" "$(cat "$notify_log")"
-if grep -Eq '(^| )-g( |$)' "$notify_log"; then
-  fail "font set does not pass a glyph flag" "$(cat "$notify_log")"
-fi
+# busctl argv: --user -- call <dest> <path> <iface> Notify <sig> app_name
+# replaces_id icon summary body actions hint_count hints... timeout
+notification() {
+  local -a args
+  mapfile -d '' args <"$busctl_dir/call-$1"
+  [[ ${args[11]} == "$2" ]] || fail "font set notification $1 has the headline \"$2\"" "$(printf '%q ' "${args[@]}")"
+  [[ ${args[14]} == 1 && ${args[15]} == urgency ]] || fail "font set notification $1 carries no glyph hint" "$(printf '%q ' "${args[@]}")"
+}
+
+[[ -e $busctl_dir/call-2 && ! -e $busctl_dir/call-3 ]] || fail "font set sends one notification each for running Ghostty and Foot" "$(ls "$busctl_dir")"
+notification 1 "You must restart Ghostty to see font change"
+notification 2 "You must restart Foot to see font change"
+[[ ! -e $tripwire ]] || fail "font set notifies through omarchy-notification-send, never notify-send"
 pass "font set notification keeps the restart headline"
 
 mapfile -d '' hook_args <"$hook_log"
