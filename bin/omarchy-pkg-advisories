@@ -1,13 +1,15 @@
 #!/bin/bash
 # omarchy:summary=Show known CVEs for installed OPR packages from the advisory sidecar.
-# omarchy:args=[--sidecar PATH] [--installed-file PATH] [--json] [--fail-closed]
+# omarchy:args=[--sidecar PATH] [--installed-file PATH] [--action install|update|remove] [--quiet-absent] [--json] [--fail-closed]
 
 set -euo pipefail
 
 SIDECAR=""
 INSTALLED_FILE=""
+ACTION=""
 JSON=0
 FAIL_CLOSED=0
+QUIET_ABSENT=0
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -19,6 +21,21 @@ while [[ $# -gt 0 ]]; do
     INSTALLED_FILE=$2
     shift 2
     ;;
+  --action)
+    ACTION=$2
+    shift 2
+    case $ACTION in
+    install|update|remove) ;;
+    *)
+      echo "Unknown action: $ACTION" >&2
+      exit 1
+      ;;
+    esac
+    ;;
+  --quiet-absent)
+    QUIET_ABSENT=1
+    shift
+    ;;
   --json)
     JSON=1
     shift
@@ -28,7 +45,7 @@ while [[ $# -gt 0 ]]; do
     shift
     ;;
   -h|--help)
-    echo "Usage: omarchy-pkg-advisories [--sidecar DIR] [--installed-file PATH] [--json] [--fail-closed]"
+    echo "Usage: omarchy-pkg-advisories [--sidecar DIR] [--installed-file PATH] [--action install|update|remove] [--quiet-absent] [--json] [--fail-closed]"
     exit 0
     ;;
   *)
@@ -37,6 +54,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   esac
 done
+
+if [[ -z $SIDECAR && -n ${OMARCHY_ADVISORY_DIR:-} && -d $OMARCHY_ADVISORY_DIR ]]; then
+  SIDECAR=$OMARCHY_ADVISORY_DIR
+fi
 
 if [[ -z $SIDECAR ]]; then
   for candidate in \
@@ -82,6 +103,9 @@ while read -r name ver arch; do
   [[ -z ${name:-} ]] && continue
   file="$SIDECAR/${name}-${ver}-${arch}.advisory.json"
   if [[ ! -f $file ]]; then
+    if (( QUIET_ABSENT )); then
+      continue
+    fi
     closed_hit=1
     if (( !JSON )); then
       echo "warning: no OPR advisory file for ${name}-${ver}-${arch}"
@@ -99,7 +123,11 @@ while read -r name ver arch; do
     closed_hit=1
   fi
   if (( !JSON )); then
-    echo "$name $ver $arch status=$status severity=$sev cves=${cves:-none}"
+    line="$name $ver $arch status=$status severity=$sev cves=${cves:-none}"
+    if [[ -n $ACTION ]]; then
+      line="$ACTION: $line"
+    fi
+    echo "$line"
   fi
   jq --argjson row "$row" '. + [$row]' "$findings_json" >"$findings_json.new" && mv "$findings_json.new" "$findings_json"
 done < <(load_installed)

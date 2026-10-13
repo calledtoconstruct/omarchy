@@ -6,6 +6,7 @@
 # omarchy:requires-sudo=true
 
 if omarchy-pkg-missing "$@"; then
+  omarchy-pkg-advisory-review --action install --sync "$@" || true
   if (( EUID == 0 )); then
     pacman -S --noconfirm --needed -- "$@" || exit 1
   else

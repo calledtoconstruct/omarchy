@@ -23,6 +23,9 @@ if [[ -n $pkg_names ]]; then
   # Add aur/ prefix to each package name and convert to space-separated for yay
   source omarchy-sudo-keepalive
 
+  mapfile -t picked <<<"$pkg_names"
+  omarchy-pkg-advisory-review --action install --aur "${picked[@]}" || true
+
   echo "$pkg_names" | sed 's/^/aur\//' | tr '\n' ' ' | xargs yay -S --noconfirm
   code=$?
   sudo updatedb --prune-bind-mounts=no --add-prunepaths=/.snapshots

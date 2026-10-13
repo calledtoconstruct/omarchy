@@ -1,0 +1,90 @@
+#!/bin/bash
+
+# omarchy:summary=Print fail-open advisory warnings for a package transaction.
+# omarchy:hidden=true
+# omarchy:args=--action install|update|remove [--sync|--local|--aur] [packages...]
+
+set -euo pipefail
+
+action=""
+mode=""
+packages=()
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --action)
+    action=${2:-}
+    shift 2
+    ;;
+  --sync)
+    mode="sync"
+    shift
+    ;;
+  --local)
+    mode="local"
+    shift
+    ;;
+  --aur)
+    mode="aur"
+    shift
+    ;;
+  -*)
+    echo "Unknown option: $1" >&2
+    exit 1
+    ;;
+  *)
+    packages+=("$1")
+    shift
+    ;;
+  esac
+done
+
+case $action in
+install|update|remove) ;;
+*)
+  echo "Unknown action: ${action:-}" >&2
+  exit 1
+  ;;
+esac
+
+case $mode in
+sync|local|aur) ;;
+*)
+  echo "Unknown package source: ${mode:-}" >&2
+  exit 1
+  ;;
+esac
+
+installed_file=$(mktemp)
+trap 'rm -f "$installed_file"' EXIT
+
+version_arch() {
+  awk '
+    $1 == "Version" && $2 == ":" && ver == "" { ver = $3 }
+    $1 == "Architecture" && $2 == ":" && arch == "" { arch = $3 }
+    END { if (ver != "" && arch != "") print ver, arch }
+  '
+}
+
+for pkg in "${packages[@]}"; do
+  [[ -n $pkg ]] || continue
+  info=""
+  case $mode in
+  sync)
+    info=$(pacman -Si "$pkg" 2>/dev/null) || true
+    ;;
+  local)
+    info=$(pacman -Q --info "$pkg" 2>/dev/null) || true
+    ;;
+  aur)
+    info=$(yay -Si "$pkg" 2>/dev/null) || true
+    ;;
+  esac
+  [[ -n $info ]] || continue
+  fields=$(printf '%s\n' "$info" | version_arch) || true
+  [[ -n ${fields:-} ]] || continue
+  printf '%s %s\n' "$pkg" "$fields" >>"$installed_file"
+done
+
+omarchy-pkg-advisories --action "$action" --quiet-absent --installed-file "$installed_file" || true
+exit 0

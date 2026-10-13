@@ -27,6 +27,7 @@ for pkg in "$@"; do
 done
 
 if (( ${#installed[@]} > 0 )); then
+  omarchy-pkg-advisory-review --action remove --local "${installed[@]}" || true
   if (( EUID == 0 )); then
     pacman -Rns --noconfirm "${installed[@]}"
   else

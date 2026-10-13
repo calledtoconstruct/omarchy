@@ -18,6 +18,9 @@ fzf_args=(
 pkg_names=$(yay -Qqe | fzf "${fzf_args[@]}")
 
 if [[ -n $pkg_names ]]; then
+  mapfile -t picked <<<"$pkg_names"
+  omarchy-pkg-advisory-review --action remove --local "${picked[@]}" || true
+
   # Convert newline-separated selections to space-separated for yay
   echo "$pkg_names" | tr '\n' ' ' | xargs sudo pacman -Rns --noconfirm
   omarchy-show-done $?

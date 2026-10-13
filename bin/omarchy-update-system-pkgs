@@ -26,6 +26,7 @@ trap 'rm -f "$errors"' EXIT
 if LC_ALL=C omarchy-update-pacman -Syu --noconfirm \
   --overwrite '/usr/share/omarchy/*' 2>"$errors"; then
   cat "$errors" >&2
+  omarchy-pkg-advisories --action update --quiet-absent || true
   exit 0
 fi
 cat "$errors" >&2
