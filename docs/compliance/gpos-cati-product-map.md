@@ -188,7 +188,7 @@ Updates within 30 days.
 - NixOS: not a CAT I.
 - Ubuntu UBTU-24-700400: vendor-supported release (stigaview indexes this ID here).
 - RHEL 9: no CAT I twin on stigaview for this SRG.
-- Omarchy check: `omarchy-update` exists; sidecar plus arch-audit is not yet the evidence.
+- Omarchy check: `omarchy-update` exists; sidecar plus arch-audit is not yet the evidence. The checker can observe a fresh `*.advisory.json` sidecar (`scanned_at` or `advisory_as_of` within 30 days) as partial.
 - Omarchy fix: timer plus sidecar/arch-audit. Status: partial.
 
 ## V-278977 / SRG-OS-000830-GPOS-00300

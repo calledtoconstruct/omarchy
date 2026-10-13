@@ -67,7 +67,8 @@ expect_row V-203749 partial partial
 expect_row V-203776 gap gap
 expect_row V-203782 gap gap
 expect_row V-252688 gap gap
-expect_row V-259333 partial partial
+# omarchy-update is present and there is no *.advisory.json. That is not 30-day evidence.
+expect_row V-259333 partial gap
 expect_row V-278977 partial partial
 expect_row V-203599 partial partial
 
@@ -141,5 +142,47 @@ expect_row V-203599 partial partial
 grep -q 'no passwordless sudo drop-in' "$out" || fail "missing passwordless command is partial"
 grep -q 'no sddm autologin file in this root' "$out" || fail "missing autologin file is not implemented"
 grep -q 'idle.lock is 900 seconds' "$out" || fail "900 second lock stays inside 15 minutes"
+
+# V-259333 is sidecar dates under --root, not the catalog sentence and not omarchy-update.
+as_of=2026-10-13
+adv_dir="$fix/var/cache/omarchy/stable/x86_64"
+mkdir -p "$adv_dir"
+rm -f "$fix/usr/bin/omarchy-update"
+
+printf '%s\n' '{"schema":1,"pkgname":"omarchy","scanned_at":"2026-09-12T00:00:00Z"}' \
+  >"$adv_dir/omarchy-1.0-1-x86_64.advisory.json"
+printf '%s\n' '{"advisory_as_of":"2026-10-13"}' >"$adv_dir/notes.json"
+"$cmd" --root "$fix" --as-of "$as_of" >"$out" 2>/dev/null
+expect_row V-259333 partial gap
+grep '^V-259333 ' "$out" | grep -q 'observed=implemented' && fail "a stale sidecar must not be implemented"
+
+printf '%s\n' '{"schema":1,"pkgname":"omarchy","advisory_as_of":"2026-09-13"}' \
+  >"$adv_dir/omarchy-1.0-1-x86_64.advisory.json"
+"$cmd" --root "$fix" --as-of "$as_of" >"$out" 2>/dev/null
+expect_row V-259333 partial partial
+grep '^V-259333 ' "$out" | grep -q 'not a patch-management program' ||
+  fail "a fresh sidecar is evidence, not a patch-management program"
+grep '^V-259333 ' "$out" | grep -q 'observed=implemented' && fail "a fresh sidecar must stay partial"
+
+printf '%s\n' '{"schema":1,"pkgname":"omarchy","scanned_at":"2026-01-01T00:00:00Z"}' \
+  >"$adv_dir/omarchy-1.0-1-x86_64.advisory.json"
+printf '%s\n' '{"schema":1,"pkgname":"omarchy-keyring","scanned_at":"2026-10-01T15:04:05Z"}' \
+  >"$adv_dir/omarchy-keyring-1.0-1-x86_64.advisory.json"
+"$cmd" --root "$fix" --as-of "$as_of" --json >"$out" 2>/dev/null
+jq -e 'any(.[]; .vuln_id == "V-259333" and .catalog == "partial" and .observed == "partial")' "$out" >/dev/null ||
+  fail "one fresh sidecar among stale ones is partial"
+jq -e 'any(.[]; .vuln_id == "V-203776" and .observed == "gap")' "$out" >/dev/null ||
+  fail "FIPS stays a gap when a fresh sidecar is present"
+jq -e 'any(.[]; .vuln_id == "V-203739" and .observed == "gap")' "$out" >/dev/null ||
+  fail "NSA crypto stays a gap when a fresh sidecar is present"
+jq -e 'any(.[]; .observed == "implemented" and .vuln_id == "V-259333")' "$out" >/dev/null &&
+  fail "V-259333 observed must not be implemented"
+
+rm -f "$adv_dir"/*.advisory.json
+"$cmd" --root "$fix" --as-of "$as_of" >"$out" 2>/dev/null
+expect_row V-259333 partial gap
+
+grep -q '^V-259333,CAT I,.*,partial,' "$ROOT/docs/compliance/gpos-srg-v3r3-overlay.csv" ||
+  fail "catalog V-259333 stays partial"
 
 pass "gpos overlay checker"
