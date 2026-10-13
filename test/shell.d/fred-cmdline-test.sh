@@ -21,6 +21,8 @@ grep -Fxq 'drop_in=/etc/limine-entry-tool.d/intel-panther-lake-fred.conf' "$ship
   fail "the production fred drop-in path is a fixed literal"
 grep -Fxq 'rebuild_needed=/var/lib/omarchy/migrations/1788521801-rebuild-needed' "$shipped_migration" ||
   fail "the production rebuild marker is a fixed literal"
+grep -Fxq 'default_limine=/etc/default/limine' "$shipped_migration" ||
+  fail "the production Limine defaults path is a fixed literal"
 if grep -q 'OMARCHY_FRED_' "$shipped_migration"; then
   fail "the migration does not accept caller-controlled privileged paths"
 fi
@@ -32,6 +34,7 @@ trap 'rm -rf "$test_tmp"' EXIT
 stub_bin="$test_tmp/bin"
 calls="$test_tmp/calls.log"
 drop_in="$test_tmp/intel-panther-lake-fred.conf"
+default_limine="$test_tmp/default-limine"
 rebuild_needed="$test_tmp/rebuild-needed"
 limine_mkinitcpio="$test_tmp/bin/limine-mkinitcpio"
 migration="$test_tmp/migration.sh"
@@ -56,6 +59,7 @@ chmod +x "$stub_bin/sudo" "$limine_mkinitcpio"
 sed \
   -e "s|^drop_in=/etc/limine-entry-tool.d/intel-panther-lake-fred.conf$|drop_in=$drop_in|" \
   -e "s|^rebuild_needed=/var/lib/omarchy/migrations/1788521801-rebuild-needed$|rebuild_needed=$rebuild_needed|" \
+  -e "s|^default_limine=/etc/default/limine$|default_limine=$default_limine|" \
   -e "s|^limine_mkinitcpio=/usr/bin/limine-mkinitcpio$|limine_mkinitcpio=$limine_mkinitcpio|" \
   "$shipped_migration" >"$migration"
 
@@ -101,6 +105,7 @@ EOF
 sed \
   -e "s|^drop_in=/etc/limine-entry-tool.d/intel-panther-lake-fred.conf$|drop_in=$custom|" \
   -e "s|^rebuild_needed=/var/lib/omarchy/migrations/1788521801-rebuild-needed$|rebuild_needed=$rebuild_needed|" \
+  -e "s|^default_limine=/etc/default/limine$|default_limine=$default_limine|" \
   -e "s|^limine_mkinitcpio=/usr/bin/limine-mkinitcpio$|limine_mkinitcpio=$limine_mkinitcpio|" \
   "$shipped_migration" >"$custom_migration"
 : >"$calls"
@@ -109,6 +114,48 @@ PATH="$stub_bin:$PATH" TEST_LOG="$calls" bash -euo pipefail "$custom_migration" 
 [[ -f $custom ]] || fail "migration leaves an edited drop-in alone"
 [[ ! -s $calls ]] || fail "an edited drop-in does not trigger a rebuild" "$(cat "$calls")"
 pass "migration leaves an edited fred drop-in alone"
+
+write_default_limine() {
+  cat >"$default_limine" <<'EOF'
+KERNEL_CMDLINE[default]+="root=PARTUUID=example rw"
+# Intel Panther Lake FRED support
+KERNEL_CMDLINE[default]+=" fred=on"
+EOF
+}
+
+write_shipped_drop_in
+write_default_limine
+: >"$calls"
+run_migration
+[[ ! -e $drop_in ]] || fail "an upgraded install loses the shipped drop-in"
+[[ $(cat "$default_limine") == 'KERNEL_CMDLINE[default]+="root=PARTUUID=example rw"' ]] ||
+  fail "migration removes only the fred=on lines Omarchy 3 appended to /etc/default/limine" "$(cat "$default_limine")"
+grep -Fxq 'limine-mkinitcpio' "$calls" || fail "an upgraded install rebuilds after removing fred=on"
+[[ ! -e $rebuild_needed ]] || fail "an upgraded install clears the pending marker"
+pass "migration removes the fred=on lines Omarchy 3 appended to /etc/default/limine"
+
+custom_drop_in_with_default() {
+  cat >"$drop_in" <<'EOF'
+# Intel Panther Lake FRED support
+KERNEL_CMDLINE[default]+=" fred=on quiet"
+EOF
+}
+
+custom_drop_in_with_default
+write_default_limine
+: >"$calls"
+run_migration
+[[ -f $drop_in ]] || fail "an edited drop-in survives the /etc/default/limine repair"
+! grep -q 'fred=on"$' "$default_limine" || fail "the appended fred=on is removed beside an edited drop-in"
+grep -Fxq 'limine-mkinitcpio' "$calls" || fail "removing the appended fred=on rebuilds"
+rm -f "$drop_in"
+pass "migration removes the appended fred=on beside an edited drop-in"
+
+: >"$calls"
+run_migration
+[[ ! -s $calls ]] || fail "a /etc/default/limine without fred=on triggers nothing" "$(cat "$calls")"
+pass "migration leaves a clean /etc/default/limine alone"
+rm -f "$default_limine"
 
 write_shipped_drop_in
 rm -f "$rebuild_needed" "$limine_mkinitcpio"

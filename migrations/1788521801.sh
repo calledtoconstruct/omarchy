@@ -5,10 +5,12 @@ echo "Remove the unused fred=on kernel command line"
 # parameter. Delete the exact file Omarchy shipped; leave an edited copy alone.
 
 drop_in=/etc/limine-entry-tool.d/intel-panther-lake-fred.conf
+default_limine=/etc/default/limine
 rebuild_needed=/var/lib/omarchy/migrations/1788521801-rebuild-needed
 limine_mkinitcpio=/usr/bin/limine-mkinitcpio
 install_command=/usr/bin/install
 rm_command=/usr/bin/rm
+sed_command=/usr/bin/sed
 
 as_root() {
   if (( EUID == 0 )); then
@@ -37,27 +39,44 @@ finish_pending_rebuild() {
   fi
 }
 
-if [[ -e $rebuild_needed && ! -e $drop_in ]]; then
+shipped_drop_in=0
+if [[ -f $drop_in ]]; then
+  expected=$(mktemp)
+  trap 'rm -f "$expected"' EXIT
+  printf '%s\n' '# Intel Panther Lake FRED support' 'KERNEL_CMDLINE[default]+=" fred=on"' >"$expected"
+  if cmp -s "$drop_in" "$expected"; then
+    shipped_drop_in=1
+  fi
+  rm -f "$expected"
+  trap - EXIT
+fi
+
+# Omarchy 3 also appended the drop-in to /etc/default/limine, which the upgrade
+# to 4 carries across and which overrides every drop-in.
+appended_to_default=0
+if [[ -f $default_limine ]] && grep -Fxq 'KERNEL_CMDLINE[default]+=" fred=on"' "$default_limine"; then
+  appended_to_default=1
+fi
+
+if (( shipped_drop_in || appended_to_default )); then
+  if ! as_root "$install_command" -Dm644 /dev/null "$rebuild_needed"; then
+    echo "Administrator privileges are required to remove the unused fred=on kernel command line. Ask an administrator to run omarchy-migrate." >&2
+    exit 1
+  fi
+
+  if (( shipped_drop_in )) && ! as_root "$rm_command" -f -- "$drop_in"; then
+    echo "Administrator privileges are required to remove the unused fred=on kernel command line. Ask an administrator to run omarchy-migrate." >&2
+    exit 1
+  fi
+
+  if (( appended_to_default )) && ! as_root "$sed_command" -i \
+    -e '/^# Intel Panther Lake FRED support$/d' \
+    -e '/^KERNEL_CMDLINE\[default\]+=" fred=on"$/d' "$default_limine"; then
+    echo "Administrator privileges are required to remove the unused fred=on kernel command line. Ask an administrator to run omarchy-migrate." >&2
+    exit 1
+  fi
+
+  finish_pending_rebuild
+elif [[ -e $rebuild_needed ]]; then
   finish_pending_rebuild
 fi
-
-[[ -f $drop_in ]] || exit 0
-
-expected=$(mktemp)
-trap 'rm -f "$expected"' EXIT
-printf '%s\n' '# Intel Panther Lake FRED support' 'KERNEL_CMDLINE[default]+=" fred=on"' >"$expected"
-cmp -s "$drop_in" "$expected" || exit 0
-rm -f "$expected"
-trap - EXIT
-
-if ! as_root "$install_command" -Dm644 /dev/null "$rebuild_needed"; then
-  echo "Administrator privileges are required to remove the unused fred=on kernel command line. Ask an administrator to run omarchy-migrate." >&2
-  exit 1
-fi
-
-if ! as_root "$rm_command" -f -- "$drop_in"; then
-  echo "Administrator privileges are required to remove the unused fred=on kernel command line. Ask an administrator to run omarchy-migrate." >&2
-  exit 1
-fi
-
-finish_pending_rebuild
