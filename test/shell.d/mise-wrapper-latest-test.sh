@@ -39,12 +39,9 @@ pass "mise wrapper does not double @latest"
 
 HOME="$home" PATH="$ROOT/bin:$PATH" "$ROOT/bin/omarchy-mise-install" \
   "http:muse[url=https://example.test/muse.sh,bin=muse]" muse
-grep -qF 'mise use -g --quiet "http:muse[url=https://example.test/muse.sh,bin=muse]" || exit 1' "$home/.local/bin/muse" ||
-  fail "mise wrapper leaves an http backend spec with options alone" "$(cat "$home/.local/bin/muse")"
-if grep -q '@latest' "$home/.local/bin/muse"; then
-  fail "mise wrapper does not append @latest onto an http backend spec"
-fi
-pass "mise wrapper leaves an http backend spec with options alone"
+grep -qF 'mise use -g --quiet "http:muse[url=https://example.test/muse.sh,bin=muse]@latest" || exit 1' "$home/.local/bin/muse" ||
+  fail "mise wrapper appends @latest after a backend spec's options" "$(cat "$home/.local/bin/muse")"
+pass "mise wrapper appends @latest after a backend spec's options"
 
 migration="$ROOT/migrations/1789093830.sh"
 [[ -f $migration ]] || fail "a migration rewrites existing mise wrappers onto @latest"
@@ -59,10 +56,20 @@ exec mise x "codex" -- "codex" "$@"
 EOF
 chmod +x "$bin_dir/codex"
 
+cat >"$bin_dir/muse" <<'EOF'
+#!/bin/bash
+export MISE_MINIMUM_RELEASE_AGE=0
+mise use -g --quiet "http:muse[url=https://example.test/muse.sh,bin=muse]" || exit 1
+exec mise x "http:muse[url=https://example.test/muse.sh,bin=muse]" -- "muse" "$@"
+EOF
+chmod +x "$bin_dir/muse"
+
 HOME="$home" PATH="$ROOT/bin:$PATH" bash -euo pipefail "$migration" >/dev/null
 
 grep -qF 'mise use -g --quiet "codex@latest" || exit 1' "$bin_dir/codex" ||
   fail "migration rewrites a quiet wrapper onto @latest" "$(cat "$bin_dir/codex")"
+grep -qF 'exec mise x "http:muse[url=https://example.test/muse.sh,bin=muse]@latest" -- "muse" "$@"' "$bin_dir/muse" ||
+  fail "migration rewrites a wrapper whose spec carries options" "$(cat "$bin_dir/muse")"
 pass "migration rewrites a quiet wrapper onto @latest"
 
 before=$(cat "$bin_dir/codex")

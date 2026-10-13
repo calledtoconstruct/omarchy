@@ -147,7 +147,7 @@ assert_lazy_stub "$omp_package" omp "${omp_package}@latest"
 assert_lazy_stub "$crush_package" crush "${crush_package}@latest"
 assert_lazy_stub "$ori_package" ori "${ori_package}@latest"
 assert_lazy_stub "$cursor_agent_package" cursor-agent "${cursor_agent_package}@latest"
-assert_lazy_stub "$muse_package" muse "$muse_package"
+assert_lazy_stub "$muse_package" muse "${muse_package}@latest"
 pass "custom agent lazy stubs preserve their mise packages"
 
 OMARCHY_TEST_MISSING_COMMAND=cursor-agent source "$ROOT/install/user/mise.sh"
