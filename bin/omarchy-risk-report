@@ -1,6 +1,6 @@
 #!/bin/bash
 # omarchy:summary=Report OPR and arch-audit CVE exposure (fail-closed when regulated).
-# omarchy:args=[--sidecar PATH] [--installed-file PATH] [--arch-audit-file PATH] [--json] [--fail-closed]
+# omarchy:args=[--sidecar PATH] [--installed-file PATH] [--arch-audit-file PATH] [--root PATH] [--json] [--fail-closed]
 
 set -euo pipefail
 
@@ -9,9 +9,10 @@ INSTALLED_FILE=""
 ARCH_AUDIT_FILE=""
 JSON=0
 FAIL_CLOSED=0
+ROOT_FS=/
 
 usage() {
-  echo "Usage: omarchy-risk-report [--sidecar DIR] [--installed-file PATH] [--arch-audit-file PATH] [--json] [--fail-closed]"
+  echo "Usage: omarchy-risk-report [--sidecar DIR] [--installed-file PATH] [--arch-audit-file PATH] [--root DIR] [--json] [--fail-closed]"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -32,6 +33,10 @@ while [[ $# -gt 0 ]]; do
     JSON=1
     shift
     ;;
+  --root)
+    ROOT_FS=$2
+    shift 2
+    ;;
   --fail-closed)
     FAIL_CLOSED=1
     shift
@@ -47,6 +52,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   esac
 done
+
+if [[ $ROOT_FS != / ]]; then
+  ROOT_FS=${ROOT_FS%/}
+fi
 
 cfg="${OMARCHY_CONFIG_HOME:-$HOME/.config/omarchy}"
 marker="$cfg/profile"
@@ -118,13 +127,50 @@ if [[ -n $ARCH_AUDIT_FILE && -f $ARCH_AUDIT_FILE ]]; then
   fi
 fi
 
+# Read-only. The profile refuses this command; the file staying on the image is the finding.
+passwordless_cmd=0
+for candidate in \
+  "$ROOT_FS/usr/bin/omarchy-sudo-passwordless" \
+  "$ROOT_FS/usr/share/omarchy/bin/omarchy-sudo-passwordless"; do
+  if [[ -e $candidate ]]; then
+    passwordless_cmd=1
+  fi
+done
+
+# ISO path is /etc/sddm.conf.d/autologin.conf with User= (not AutologinEnable).
+# Also accept the GPOS keys in sddm.conf and any drop-in. A missing file is clean.
+autologin=0
+shopt -s nullglob
+sddm_files=("$ROOT_FS/etc/sddm.conf")
+sddm_files+=("$ROOT_FS/etc/sddm.conf.d/"*)
+shopt -u nullglob
+for file in "${sddm_files[@]}"; do
+  [[ -f $file ]] || continue
+  if grep -Eq '^[[:space:]]*User[[:space:]]*=[[:space:]]*[^[:space:]#]' "$file" ||
+    grep -Eq '^[[:space:]]*AutologinEnable[[:space:]]*=[[:space:]]*true([[:space:]]|$)' "$file" ||
+    grep -Eq '^[[:space:]]*AutologinUser[[:space:]]*=[[:space:]]*[^[:space:]#]' "$file"; then
+    autologin=1
+  fi
+done
+
+if (( passwordless_cmd == 1 || autologin == 1 )); then
+  closed_hit=1
+fi
+
 closed=false
 if (( FAIL_CLOSED == 1 )); then
   closed=true
 fi
 
-report=$(jq -nc --arg profile "$profile" --argjson opr "$opr_json" --argjson arch "$arch_json" --argjson closed "$closed" \
-  '{profile:$profile, opr:$opr, arch:$arch, closed:$closed}')
+report=$(jq -nc \
+  --arg profile "$profile" \
+  --argjson opr "$opr_json" \
+  --argjson arch "$arch_json" \
+  --argjson closed "$closed" \
+  --argjson passwordless "$passwordless_cmd" \
+  --argjson autologin "$autologin" \
+  '{profile:$profile, opr:$opr, arch:$arch, closed:$closed,
+    machine:{passwordless_sudo_command:($passwordless==1), sddm_autologin:($autologin==1)}}')
 
 if (( JSON == 1 )); then
   printf '%s\n' "$report"
@@ -148,6 +194,12 @@ else
     | select((.severity // "" | ascii_upcase) == "HIGH" or (.severity // "" | ascii_upcase) == "CRITICAL")
     | "arch-audit HIGH: \(.name) \(.cve) severity=\(.severity)"
   ' <<<"$report"
+  if (( passwordless_cmd == 1 )); then
+    echo "passwordless sudo command is present"
+  fi
+  if (( autologin == 1 )); then
+    echo "SDDM autologin is enabled"
+  fi
 fi
 
 if (( FAIL_CLOSED == 1 && closed_hit == 1 )); then
