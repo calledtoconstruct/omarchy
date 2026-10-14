@@ -22,6 +22,7 @@ cat >"$mock_bin/pgrep" <<'SH'
 #!/bin/bash
 # procps-ng 4 pgrep has no -q short option. It always prints matching PIDs;
 # callers quiet it with >/dev/null.
+[[ -n ${OMARCHY_TEST_NO_TERMINALS:-} ]] && exit 1
 printf '15887\n'
 exit 0
 SH
@@ -66,7 +67,7 @@ tripwire="$tmpdir/notify-send-was-used"
 mkdir -p "$busctl_dir"
 
 output=$(
-  HOME="$home" OMARCHY_TEST_HOOK_LOG="$hook_log" OMARCHY_TEST_BUSCTL_DIR="$busctl_dir" \
+  HOME="$home" OMARCHY_PATH="$ROOT" OMARCHY_TEST_HOOK_LOG="$hook_log" OMARCHY_TEST_BUSCTL_DIR="$busctl_dir" \
     OMARCHY_TEST_NOTIFY_TRIPWIRE="$tripwire" PATH="$mock_bin:$ROOT/bin:$PATH" \
     "$ROOT/bin/omarchy-font-set" "Fira Mono" 2>&1
 ) || fail "font set accepts a font name that contains a space" "$output"
@@ -81,7 +82,8 @@ notification() {
   local -a args
   mapfile -d '' args <"$busctl_dir/call-$1"
   [[ ${args[11]} == "$2" ]] || fail "font set notification $1 has the headline \"$2\"" "$(printf '%q ' "${args[@]}")"
-  [[ ${args[14]} == 1 && ${args[15]} == urgency ]] || fail "font set notification $1 carries no glyph hint" "$(printf '%q ' "${args[@]}")"
+  [[ ${args[14]} == 2 && ${args[18]} == omarchy-glyph && ${args[20]} == $'\xee\x99\x99' ]] ||
+    fail "font set notification $1 carries the font glyph" "$(printf '%q ' "${args[@]}")"
 }
 
 [[ -e $busctl_dir/call-2 && ! -e $busctl_dir/call-3 ]] || fail "font set sends one notification each for running Ghostty and Foot" "$(ls "$busctl_dir")"
@@ -94,3 +96,12 @@ mapfile -d '' hook_args <"$hook_log"
 [[ ${#hook_args[@]} == 2 && ${hook_args[0]} == "font-set" && ${hook_args[1]} == "Fira Mono" ]] ||
   fail "font set passes the full font name as one hook argument" "$(printf '%q ' "${hook_args[@]}")"
 pass "font set passes the full font name as one hook argument"
+
+rm -f "$busctl_dir"/call-*
+output=$(
+  HOME="$home" OMARCHY_PATH="$ROOT" OMARCHY_TEST_HOOK_LOG="$hook_log" OMARCHY_TEST_BUSCTL_DIR="$busctl_dir" \
+    OMARCHY_TEST_NOTIFY_TRIPWIRE="$tripwire" OMARCHY_TEST_NO_TERMINALS=1 PATH="$mock_bin:$ROOT/bin:$PATH" \
+    "$ROOT/bin/omarchy-font-set" "Fira Mono" 2>&1
+) || fail "font set succeeds with no terminal running" "$output"
+[[ -z $output && ! -e $busctl_dir/call-1 ]] || fail "font set sends no restart notification when no terminal is running" "$output"
+pass "font set sends no restart notification when no terminal is running"
