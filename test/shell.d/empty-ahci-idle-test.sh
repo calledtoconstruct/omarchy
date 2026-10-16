@@ -4,15 +4,17 @@ set -euo pipefail
 
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
-leaf="$ROOT/install/hardware/dell/xps-9360-ahci-idle.sh"
+leaf="$ROOT/install/hardware/intel/empty-ahci-idle.sh"
 migration="$ROOT/migrations/1792148300.sh"
 all="$ROOT/install/hardware/all.sh"
 
-bash -n "$leaf" || fail "the XPS 13 9360 AHCI idle script has valid syntax"
-bash -n "$migration" || fail "the XPS 13 9360 AHCI idle migration has valid syntax"
-grep -q 'run_logged .*hardware/dell/xps-9360-ahci-idle.sh' "$all" ||
-  fail "hardware setup lets the XPS 13 9360's empty SATA controller idle"
-pass "the XPS 13 9360 AHCI idle setting is valid and runs during hardware setup"
+bash -n "$leaf" || fail "the empty AHCI idle script has valid syntax"
+bash -n "$migration" || fail "the empty AHCI idle migration has valid syntax"
+grep -q 'run_logged .*hardware/intel/empty-ahci-idle.sh' "$all" ||
+  fail "hardware setup lets an empty Intel RAID SATA controller idle"
+! grep -q 'xps-9360-ahci-idle' "$leaf" "$migration" "$all" ||
+  fail "the empty controller idle setting is not tied to a laptop model"
+pass "the empty AHCI idle setting is valid and runs during hardware setup"
 
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
@@ -42,7 +44,7 @@ export OMARCHY_PCI_DEVICES_ROOT="$scratch/pci"
 export TEST_PRODUCT_NAME="XPS 13 9360"
 export TEST_PRODUCT_FAMILY="XPS"
 
-rule="$scratch/rules/71-omarchy-xps-9360-ahci-idle.rules"
+rule="$scratch/rules/71-omarchy-empty-ahci-idle.rules"
 rule_line='ACTION=="bind|change", SUBSYSTEM=="pci", ATTR{vendor}=="0x8086", ATTR{device}=="0x282a", ATTR{remapped_nvme}=="0", ATTR{power/control}="auto"'
 
 controller() {
@@ -70,18 +72,6 @@ reset() {
   rm -rf "$scratch/rules" "$scratch/pci"
   mkdir -p "$scratch/rules" "$scratch/pci"
 }
-
-for product in "XPS 13 9310" "XPS 13 9365"; do
-  reset
-  controller 0 unknown
-  TEST_PRODUCT_NAME="$product" run_leaf
-  TEST_PRODUCT_NAME="$product" run_migration
-  [[ ! -e $rule && $(<"$scratch/pci/0000:00:17.0/power/control") == "on" && ! -s $CALL_LOG ]] ||
-    fail "other machines do not idle the SATA controller"
-done
-pass "other machines do not idle the SATA controller"
-
-TEST_PRODUCT_NAME="XPS 13 9360"
 
 reset
 controller 1 unknown
@@ -116,4 +106,4 @@ run_leaf
   fail "running hardware setup again leaves an idle controller alone"
 run_migration
 [[ ! -s $CALL_LOG ]] || fail "the migration leaves an idle controller alone"
-pass "an empty XPS 13 9360 SATA controller is allowed to runtime-suspend once"
+pass "an empty Intel RAID SATA controller is allowed to runtime-suspend once"

@@ -1,8 +1,7 @@
-echo "Let the Dell XPS 13 9360's empty SATA controller runtime-suspend"
+echo "Let an empty Intel RAID-mode SATA controller runtime-suspend"
 
-# See install/hardware/dell/xps-9360-ahci-idle.sh. The script leaves an
-# already-idle controller alone, so a second user does not write the rule again.
+# See install/hardware/intel/empty-ahci-idle.sh. The script leaves an
+# already-idle controller alone, and it does nothing when a disk is present
+# or NVMe is remapped behind the controller.
 
-omarchy-hw-match "XPS 13 9360" || exit 0
-
-source "$OMARCHY_PATH/install/hardware/dell/xps-9360-ahci-idle.sh"
+source "$OMARCHY_PATH/install/hardware/intel/empty-ahci-idle.sh"
