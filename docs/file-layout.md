@@ -134,6 +134,7 @@ default/**                     ──►  omarchy-settings    /usr/share/omarchy
   ├─ systemd/user/*.service                             /usr/lib/systemd/user/
   ├─ systemd/user/app.slice.d/10-oomd.conf              /usr/lib/systemd/user/app.slice.d/
   ├─ systemd/system-sleep/unmount-fuse                  /usr/lib/systemd/system-sleep/
+  ├─ systemd/system-sleep/omarchy-s0ix-fallback         /usr/lib/systemd/system-sleep/
   ├─ systemd/zram-generator.conf.d/90-omarchy.conf      /usr/lib/systemd/zram-generator.conf.d/
   ├─ fonts/omarchy/omarchy.ttf                          /usr/share/fonts/omarchy/
   ├─ sddm/omarchy/                                      /usr/share/sddm/themes/omarchy/
@@ -147,7 +148,7 @@ logo.{txt,svg}, icon.{txt,png}  ──► omarchy-settings    /usr/share/omarchy
                                                         /etc/skel/.config/omarchy/branding/{about,screensaver}.txt
 ```
 
-The hardware-conditional `force-igpu` and `keyboard-backlight` sources also live under `default/systemd/system-sleep/`, but their setup commands publish root-owned copies only on machines that need them; they are not installed by `omarchy-settings`.
+The hardware-conditional `force-igpu` and `keyboard-backlight` sources also live under `default/systemd/system-sleep/`, but their setup commands publish root-owned copies only on machines that need them; they are not installed by `omarchy-settings`. `omarchy-s0ix-fallback` is installed beside `unmount-fuse` when the packaged source contains it. The migration `1792150064` copies it into place for an install whose settings package published the default tree without that systemd path.
 
 ### Platform root
 
