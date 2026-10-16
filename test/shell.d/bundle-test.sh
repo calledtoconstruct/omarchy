@@ -911,3 +911,379 @@ if (( status == 124 )); then
 fi
 (( status == 0 )) || fail "dry-run reset failed while the ledger lock was held" "$(cat "$home/dry-reset.err")"
 pass "dry-run remove and reset do not take the ledger lock"
+
+# A package that was already installed, and was not explicit, is not removed.
+home=$(new_home dep-keep)
+printf 'libbar\n' >"$home/installed.list"
+write_bundle "$home/owner" lib-owner "Lib Owner" '["libbar"]'
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/owner" >/dev/null
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-remove" --yes lib-owner >/dev/null
+if [[ -f $home/calls.log ]] && grep -q 'omarchy-pkg-drop libbar' "$home/calls.log"; then
+  fail "a preinstalled dependency was passed to drop" "$(cat "$home/calls.log")"
+fi
+grep -qxF libbar "$home/installed.list" || fail "the preinstalled dependency is still installed" "$(cat "$home/installed.list" 2>/dev/null)"
+if [[ -f $home/.local/state/omarchy/bundles/ledger.json ]] && jq -e '.bundles["lib-owner"] != null' "$home/.local/state/omarchy/bundles/ledger.json" >/dev/null; then
+  fail "the bundle stayed installed after removal" "$(cat "$home/.local/state/omarchy/bundles/ledger.json")"
+fi
+pass "a preinstalled dependency is kept when its bundle is removed"
+
+# A failed package drop still removes the bundle record.
+home=$(new_home drop-fail)
+write_bundle "$home/app" app-owner "App Owner" '["stuckpkg"]'
+mkdir -p "$home/bin"
+cat >"$home/bin/omarchy-pkg-drop" <<'EOF'
+#!/bin/bash
+printf 'omarchy-pkg-drop %s\n' "$*" >>"$HOME/calls.log"
+exit 1
+EOF
+chmod +x "$home/bin/omarchy-pkg-drop"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/app" >/dev/null
+output=$(
+  HOME="$home" \
+    XDG_DATA_HOME="$home/.local/share" \
+    XDG_STATE_HOME="$home/.local/state" \
+    XDG_CONFIG_HOME="$home/.config" \
+    PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+    "$ROOT/bin/omarchy-bundle-remove" --yes app-owner 2>&1
+) || fail "a failed package drop aborted bundle removal" "$output"
+grep -q 'leaving those packages installed' <<<"$output" || fail "removal says the packages were left installed" "$output"
+grep -qxF stuckpkg "$home/installed.list" || fail "the package that could not be dropped is still installed" "$(cat "$home/installed.list")"
+if [[ -f $home/.local/state/omarchy/bundles/ledger.json ]] && jq -e '.bundles["app-owner"] != null' "$home/.local/state/omarchy/bundles/ledger.json" >/dev/null; then
+  fail "the bundle record survived a failed package drop" "$(cat "$home/.local/state/omarchy/bundles/ledger.json")"
+fi
+pass "a failed package drop still removes the bundle record"
+
+# Manifest text cannot repaint the install plan.
+home=$(new_home controls)
+dir="$home/bad"
+write_bundle "$dir" control-bundle "Clean Name" '[]'
+jq --arg name $'Bad\033[2Jname' '.name = $name' "$dir/bundle.json" >"$dir/bundle.json.next"
+mv "$dir/bundle.json.next" "$dir/bundle.json"
+if output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-validate" "$dir" 2>&1); then
+  fail "validate accepted a name with a control character" "$output"
+fi
+grep -q 'control character' <<<"$output" || fail "validate names the control character" "$output"
+[[ ! -e $home/.local/state/omarchy/bundles/ledger.json ]] || fail "a refused manifest wrote a ledger"
+pass "a manifest name with a control character is refused"
+
+# A config file that appears while packages install is left alone, and a failed
+# install does not delete it.
+home=$(new_home config-race)
+dir="$home/cfg"
+write_bundle "$dir" cfg-race "Cfg Race" '["racepkg"]'
+mkdir -p "$dir/config"
+printf 'from-bundle\n' >"$dir/config/note.txt"
+jq '.config = [{"source":"config/note.txt","target":"~/.config/note.txt"}] | .plugins = ["https://example.test/gamemode-switcher.git"]' \
+  "$dir/bundle.json" >"$dir/bundle.json.next"
+mv "$dir/bundle.json.next" "$dir/bundle.json"
+mkdir -p "$home/bin"
+cat >"$home/bin/omarchy-pkg-add" <<'EOF'
+#!/bin/bash
+printf 'omarchy-pkg-add %s\n' "$*" >>"$HOME/calls.log"
+mkdir -p "$HOME/.config"
+printf 'user-during-install\n' >"$HOME/.config/note.txt"
+touch "$HOME/installed.list" "$HOME/explicit.list"
+for pkg in "$@"; do
+  printf '%s\n' "$pkg" >>"$HOME/installed.list"
+  printf '%s\n' "$pkg" >>"$HOME/explicit.list"
+done
+exit 0
+EOF
+chmod +x "$home/bin/omarchy-pkg-add"
+if output=$(
+  HOME="$home" \
+    XDG_DATA_HOME="$home/.local/share" \
+    XDG_STATE_HOME="$home/.local/state" \
+    XDG_CONFIG_HOME="$home/.config" \
+    PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+    "$ROOT/bin/omarchy-bundle-add" --yes "$dir" 2>&1
+); then
+  fail "the plugin failure still installed the bundle" "$output"
+fi
+[[ $(<"$home/.config/note.txt") == user-during-install ]] || fail "a failed install deleted or replaced the config written during package install" "$(cat "$home/.config/note.txt" 2>/dev/null)"
+pass "a failed install does not delete a config file it did not write"
+
+# A config file created while packages install is not overwritten.
+home=$(new_home config-appeared)
+dir="$home/cfg"
+write_bundle "$dir" cfg-appeared "Cfg Appeared" '["racepkg"]'
+mkdir -p "$dir/config"
+printf 'from-bundle\n' >"$dir/config/note.txt"
+jq '.config = [{"source":"config/note.txt","target":"~/.config/note.txt"}]' \
+  "$dir/bundle.json" >"$dir/bundle.json.next"
+mv "$dir/bundle.json.next" "$dir/bundle.json"
+mkdir -p "$home/bin"
+cat >"$home/bin/omarchy-pkg-add" <<'EOF'
+#!/bin/bash
+printf 'omarchy-pkg-add %s\n' "$*" >>"$HOME/calls.log"
+mkdir -p "$HOME/.config"
+printf 'user-during-install\n' >"$HOME/.config/note.txt"
+touch "$HOME/installed.list" "$HOME/explicit.list"
+for pkg in "$@"; do
+  printf '%s\n' "$pkg" >>"$HOME/installed.list"
+  printf '%s\n' "$pkg" >>"$HOME/explicit.list"
+done
+exit 0
+EOF
+chmod +x "$home/bin/omarchy-pkg-add"
+HOME="$home" \
+  XDG_DATA_HOME="$home/.local/share" \
+  XDG_STATE_HOME="$home/.local/state" \
+  XDG_CONFIG_HOME="$home/.config" \
+  PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+  "$ROOT/bin/omarchy-bundle-add" --yes "$dir" >/dev/null
+[[ $(<"$home/.config/note.txt") == user-during-install ]] || fail "install overwrote a config file created while packages were installing" "$(cat "$home/.config/note.txt")"
+jq -e --arg target "$home/.config/note.txt" '.configs[$target].user_owned == true' \
+  "$home/.local/state/omarchy/bundles/ledger.json" >/dev/null \
+  || fail "a config file created during install is recorded as the bundle's copy" "$(cat "$home/.local/state/omarchy/bundles/ledger.json")"
+pass "a config file created during install is left in place"
+
+# An edit saved while packages are being removed is kept.
+home=$(new_home config-during-remove)
+dir="$home/cfg"
+write_bundle "$dir" cfg-bundle "Cfg" '["apppkg"]'
+mkdir -p "$dir/config"
+printf 'from-bundle\n' >"$dir/config/note.txt"
+jq '.config = [{"source":"config/note.txt","target":"~/.config/note.txt"}]' \
+  "$dir/bundle.json" >"$dir/bundle.json.next"
+mv "$dir/bundle.json.next" "$dir/bundle.json"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$dir" >/dev/null
+mkdir -p "$home/bin"
+cat >"$home/bin/omarchy-pkg-drop" <<'EOF'
+#!/bin/bash
+printf 'omarchy-pkg-drop %s\n' "$*" >>"$HOME/calls.log"
+printf 'edited-during-remove\n' >"$HOME/.config/note.txt"
+exit 0
+EOF
+chmod +x "$home/bin/omarchy-pkg-drop"
+output=$(
+  HOME="$home" \
+    XDG_DATA_HOME="$home/.local/share" \
+    XDG_STATE_HOME="$home/.local/state" \
+    XDG_CONFIG_HOME="$home/.config" \
+    PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+    "$ROOT/bin/omarchy-bundle-remove" --yes cfg-bundle 2>&1
+)
+[[ $(<"$home/.config/note.txt") == edited-during-remove ]] || fail "an edit during package removal was deleted" "$(cat "$home/.config/note.txt" 2>/dev/null)"
+pass "an edit saved during package removal is kept"
+
+# A changed plugin checkout and a retargeted skill link are kept.
+home=$(new_home plugin-dirty)
+plugin_id="example.plugin"
+mkdir -p "$home/bin"
+cat >"$home/bin/omarchy-plugin-add" <<'EOF'
+#!/bin/bash
+printf 'omarchy-plugin-add %s\n' "$*" >>"$HOME/calls.log"
+dir="$HOME/.config/omarchy/plugins/example.plugin"
+mkdir -p "$dir"
+git -C "$dir" init -q
+git -C "$dir" -c user.email=test@example.test -c user.name=test commit --allow-empty -q -m init
+echo "Added example.plugin into $dir"
+exit 0
+EOF
+cat >"$home/bin/omarchy-plugin-remove" <<'EOF'
+#!/bin/bash
+printf 'omarchy-plugin-remove %s\n' "$*" >>"$HOME/calls.log"
+exit 0
+EOF
+chmod +x "$home/bin/omarchy-plugin-add" "$home/bin/omarchy-plugin-remove"
+dir="$home/plug"
+write_bundle "$dir" plug-dirty "Plug Dirty" '[]'
+mkdir -p "$dir/skills/demo"
+printf '# demo\n' >"$dir/skills/demo/SKILL.md"
+jq '.plugins = ["https://example.test/gamemode-switcher.git"] | .skills = ["skills/demo"]' \
+  "$dir/bundle.json" >"$dir/bundle.json.next"
+mv "$dir/bundle.json.next" "$dir/bundle.json"
+HOME="$home" \
+  XDG_DATA_HOME="$home/.local/share" \
+  XDG_STATE_HOME="$home/.local/state" \
+  XDG_CONFIG_HOME="$home/.config" \
+  PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+  "$ROOT/bin/omarchy-bundle-add" --yes "$dir" >/dev/null
+git -C "$home/.config/omarchy/plugins/$plugin_id" -c user.email=test@example.test -c user.name=test commit --allow-empty -q -m edited
+ln -sfn /tmp/not-the-bundle "$home/.agents/skills/plug-dirty-demo"
+output=$(
+  HOME="$home" \
+    XDG_DATA_HOME="$home/.local/share" \
+    XDG_STATE_HOME="$home/.local/state" \
+    XDG_CONFIG_HOME="$home/.config" \
+    PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+    "$ROOT/bin/omarchy-bundle-remove" --yes plug-dirty 2>&1
+)
+if grep -q 'omarchy-plugin-remove ' "$home/calls.log"; then
+  fail "a plugin with a new commit was removed" "$(cat "$home/calls.log")"
+fi
+[[ -d $home/.config/omarchy/plugins/$plugin_id ]] || fail "the edited plugin directory was removed"
+[[ -L $home/.agents/skills/plug-dirty-demo ]] || fail "a retargeted skill link was removed"
+grep -q 'local changes' <<<"$output" || fail "removal says the plugin was kept" "$output"
+pass "a changed plugin and a retargeted skill link are kept"
+
+# An unchanged plugin checkout and skill link are removed.
+home=$(new_home plugin-clean)
+mkdir -p "$home/bin"
+cat >"$home/bin/omarchy-plugin-add" <<'EOF'
+#!/bin/bash
+printf 'omarchy-plugin-add %s\n' "$*" >>"$HOME/calls.log"
+dir="$HOME/.config/omarchy/plugins/example.plugin"
+mkdir -p "$dir"
+git -C "$dir" init -q
+git -C "$dir" -c user.email=test@example.test -c user.name=test commit --allow-empty -q -m init
+echo "Added example.plugin into $dir"
+exit 0
+EOF
+cat >"$home/bin/omarchy-plugin-remove" <<'EOF'
+#!/bin/bash
+printf 'omarchy-plugin-remove %s\n' "$*" >>"$HOME/calls.log"
+exit 0
+EOF
+chmod +x "$home/bin/omarchy-plugin-add" "$home/bin/omarchy-plugin-remove"
+dir="$home/plug"
+write_bundle "$dir" plug-clean "Plug Clean" '[]'
+mkdir -p "$dir/skills/demo"
+printf '# demo\n' >"$dir/skills/demo/SKILL.md"
+jq '.plugins = ["https://example.test/gamemode-switcher.git"] | .skills = ["skills/demo"]' \
+  "$dir/bundle.json" >"$dir/bundle.json.next"
+mv "$dir/bundle.json.next" "$dir/bundle.json"
+output=$(
+  HOME="$home" \
+    XDG_DATA_HOME="$home/.local/share" \
+    XDG_STATE_HOME="$home/.local/state" \
+    XDG_CONFIG_HOME="$home/.config" \
+    PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+    "$ROOT/bin/omarchy-bundle-add" --yes "$dir" 2>&1
+)
+grep -q 'unsandboxed' <<<"$output" || fail "bundle add did not warn that plugins are unsandboxed" "$output"
+HOME="$home" \
+  XDG_DATA_HOME="$home/.local/share" \
+  XDG_STATE_HOME="$home/.local/state" \
+  XDG_CONFIG_HOME="$home/.config" \
+  PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+  "$ROOT/bin/omarchy-bundle-remove" --yes plug-clean >/dev/null
+calls_have "$home" "omarchy-plugin-remove --yes -- example.plugin" \
+  || fail "an unchanged plugin was not removed" "$(cat "$home/calls.log")"
+[[ ! -L $home/.agents/skills/plug-clean-demo ]] || fail "an unchanged skill link was kept"
+pass "an unchanged plugin and skill link are removed"
+
+# A relative directory shaped like a git URL does not replace the clone.
+home=$(new_home git-shadow)
+mkdir -p "$home/work/https:/example.test/repo.git"
+printf '{}\n' >"$home/work/https:/example.test/repo.git/bundle.json"
+mkdir -p "$home/git-bin"
+cat >"$home/git-bin/git" <<'EOF'
+#!/bin/bash
+printf 'git %s\n' "$*" >>"$HOME/git.log"
+if [[ $1 == clone ]]; then
+  dest="${!#}"
+  mkdir -p "$dest"
+  printf 'not-the-shadow\n' >"$dest/marker"
+  exit 0
+fi
+if [[ $1 == -C ]]; then
+  printf 'abc123\n'
+  exit 0
+fi
+exit 0
+EOF
+chmod +x "$home/git-bin/git"
+output=$(
+  cd "$home/work" && \
+    HOME="$home" \
+    XDG_DATA_HOME="$home/.local/share" \
+    XDG_STATE_HOME="$home/.local/state" \
+    XDG_CONFIG_HOME="$home/.config" \
+    PATH="$home/git-bin:$stub_dir:$ROOT/bin:$PATH" \
+    "$ROOT/bin/omarchy-bundle-add" --yes "https://example.test/repo.git" 2>&1
+) || true
+grep -q 'development/unsafe source' <<<"$output" || fail "a shadowed git URL skipped the unsafe-source warning" "$output"
+grep -q 'git clone -- https://example.test/repo.git' "$home/git.log" \
+  || fail "a shadowed git URL was not cloned" "$(cat "$home/git.log" 2>/dev/null)"
+pass "a git URL is cloned even when a relative directory has that shape"
+
+# A kept plugin is named by its id, and a credential in a git URL is not stored.
+home=$(new_home redact)
+plugin_dir="$home/.config/omarchy/plugins/example.plugin"
+mkdir -p "$plugin_dir"
+git -C "$plugin_dir" init -q
+git -C "$plugin_dir" remote add origin "https://example.test/gamemode-switcher.git"
+write_bundle "$home/plug" plug-shown "Plug Shown" '[]'
+jq '.plugins = ["https://example.test/gamemode-switcher.git"]' \
+  "$home/plug/bundle.json" >"$home/plug/bundle.json.next"
+mv "$home/plug/bundle.json.next" "$home/plug/bundle.json"
+output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --dry-run --yes "$home/plug")
+grep -q 'example.plugin' <<<"$output" || fail "the plan hides the id of a plugin that will be kept" "$output"
+mkdir -p "$home/git-bin"
+fixture="$home/git-fixture"
+write_bundle "$fixture" token-bundle "Token Bundle" '[]'
+printf 'abc123\n' >"$home/commit.txt"
+cat >"$home/git-bin/git" <<'EOF'
+#!/bin/bash
+printf 'git %s\n' "$*" >>"$HOME/git.log"
+if [[ $1 == clone ]]; then
+  dest="${!#}"
+  mkdir -p "$dest"
+  cp -a "$BUNDLE_FIXTURE"/. "$dest"/
+  mkdir -p "$dest/.git"
+  printf '%s\n' "$BUNDLE_COMMIT" >"$dest/.git/HEAD"
+  exit 0
+fi
+if [[ $1 == -C ]]; then
+  printf '%s\n' "$BUNDLE_COMMIT"
+  exit 0
+fi
+exit 0
+EOF
+chmod +x "$home/git-bin/git"
+output=$(
+  HOME="$home" \
+    XDG_DATA_HOME="$home/.local/share" \
+    XDG_STATE_HOME="$home/.local/state" \
+    XDG_CONFIG_HOME="$home/.config" \
+    BUNDLE_FIXTURE="$fixture" \
+    BUNDLE_COMMIT=$(<"$home/commit.txt") \
+    PATH="$home/git-bin:$stub_dir:$ROOT/bin:$PATH" \
+    "$ROOT/bin/omarchy-bundle-add" --yes "https://user:token@example.test/token-bundle.git" 2>&1
+) || fail "a credentialed git URL failed to install" "$output"
+grep -q 'git clone -- https://user:token@example.test/token-bundle.git' "$home/git.log" \
+  || fail "clone did not receive the original URL" "$(cat "$home/git.log")"
+if grep -q 'user:token@' "$home/.local/state/omarchy/bundles/ledger.json"; then
+  fail "the ledger stored a credential from the git URL" "$(cat "$home/.local/state/omarchy/bundles/ledger.json")"
+fi
+list=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-list")
+if grep -q 'user:token@' <<<"$list"; then
+  fail "bundle list printed a credential" "$list"
+fi
+grep -q 'https://example.test/token-bundle.git' <<<"$list" || fail "bundle list omitted the redacted source" "$list"
+pass "kept plugins are named, and git credentials are not stored or listed"
+
+# The ledger lock fd is not inherited by a package-install child.
+home=$(new_home lock-fd)
+write_bundle "$home/app" lock-fd "Lock Fd" '["lockpkg"]'
+mkdir -p "$home/bin"
+cat >"$home/bin/omarchy-pkg-add" <<'EOF'
+#!/bin/bash
+printf 'omarchy-pkg-add %s\n' "$*" >>"$HOME/calls.log"
+leaked=0
+for fd in /proc/self/fd/*; do
+  target=$(readlink -- "$fd" 2>/dev/null || true)
+  if [[ $target == *ledger.lock ]]; then
+    leaked=1
+  fi
+done
+printf 'lock-leaked %s\n' "$leaked" >>"$HOME/calls.log"
+touch "$HOME/installed.list" "$HOME/explicit.list"
+for pkg in "$@"; do
+  printf '%s\n' "$pkg" >>"$HOME/installed.list"
+  printf '%s\n' "$pkg" >>"$HOME/explicit.list"
+done
+exit 0
+EOF
+chmod +x "$home/bin/omarchy-pkg-add"
+HOME="$home" \
+  XDG_DATA_HOME="$home/.local/share" \
+  XDG_STATE_HOME="$home/.local/state" \
+  XDG_CONFIG_HOME="$home/.config" \
+  PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+  "$ROOT/bin/omarchy-bundle-add" --yes "$home/app" >/dev/null
+calls_have "$home" "lock-leaked 0" || fail "a package install child inherited the ledger lock" "$(cat "$home/calls.log")"
+pass "package install does not inherit the ledger lock"
+

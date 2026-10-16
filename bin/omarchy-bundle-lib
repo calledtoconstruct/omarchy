@@ -99,7 +99,18 @@ bundle_git_url() {
 bundle_classify_source() {
   local spec="$1" expanded
   expanded=$(bundle_expand_home "$spec")
-  if [[ -d $expanded ]]; then
+  # A git URL is also a relative path: https://host/repo.git names the
+  # directory https:/host/repo.git. That directory must not skip the clone.
+  # ./relative, absolute, and ~/ paths stay local folders.
+  if [[ $spec == ./* || $spec == /* || $spec == "~" || $spec == "~/"* ]]; then
+    if [[ -d $expanded ]]; then
+      printf '%s\n' path
+      return 0
+    fi
+  elif bundle_git_url "$spec"; then
+    printf '%s\n' git
+    return 0
+  elif [[ -d $expanded ]]; then
     printf '%s\n' path
     return 0
   fi
@@ -107,11 +118,33 @@ bundle_classify_source() {
     printf '%s\n' registry
     return 0
   fi
-  if bundle_git_url "$spec"; then
-    printf '%s\n' git
-    return 0
-  fi
   printf '%s\n' unknown
+}
+
+bundle_no_controls() {
+  [[ $1 != *[[:cntrl:]]* ]]
+}
+
+bundle_plain() {
+  local value="$1"
+  value=${value//[[:cntrl:]]/?}
+  printf '%s\n' "$value"
+}
+
+bundle_show() {
+  local line
+  while IFS= read -r line || [[ -n $line ]]; do
+    printf '%s\n' "${line//[[:cntrl:]]/?}"
+  done
+}
+
+# Drop userinfo so a token in https://user:token@host/repo is not stored or printed.
+bundle_redact_url() {
+  local url="$1"
+  if [[ $url =~ ^([A-Za-z][A-Za-z0-9+.-]*://)[^/?#]+@(.+)$ ]]; then
+    url="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+  fi
+  printf '%s\n' "$url"
 }
 
 bundle_ledger_empty() {
@@ -146,11 +179,20 @@ bundle_ledger_write() {
 # Hold this from the ledger read through the final write. The lock drops when
 # the command exits, which includes a failed install's cleanup.
 bundle_ledger_lock() {
-  local dir
+  local dir ready
   dir=$(dirname -- "$(bundle_ledger_path)")
   mkdir -p -- "$dir"
-  exec {BUNDLE_LOCK_FD}>>"$dir/ledger.lock"
-  flock "$BUNDLE_LOCK_FD"
+  # Hold the lock in another process. A fd opened in this function is visible
+  # to every child, and bash will not leave FD_CLOEXEC set on it. The helper
+  # exits when this shell does, which includes a failed install's cleanup.
+  coproc BUNDLE_LOCK_HOLDER {
+    exec 9>>"$dir/ledger.lock"
+    flock 9 || exit 1
+    printf 'ready\n'
+    cat >/dev/null
+  }
+  IFS= read -r -u "${BUNDLE_LOCK_HOLDER[0]}" ready
+  [[ $ready == ready ]] || bundle_fail "could not lock the bundle ledger"
 }
 
 bundle_tree_sha256() {
@@ -222,6 +264,24 @@ bundle_plugin_present() {
   [[ -e $dir/$id || -L $dir/$id ]]
 }
 
+# True when the checkout is not the commit recorded at install, or is dirty,
+# or is not a git checkout we can verify. Removal then keeps the directory.
+bundle_plugin_changed() {
+  local id="$1" recorded="$2" dir head
+  dir="$(bundle_plugins_dir)/$id"
+  [[ -e $dir || -L $dir ]] || return 1
+  if [[ -L $dir && ! -d $dir ]]; then
+    return 0
+  fi
+  head=$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)
+  [[ -n $head ]] || return 0
+  [[ -z $(git -C "$dir" status --porcelain 2>/dev/null || true) ]] || return 0
+  if [[ -n $recorded && $head != "$recorded" ]]; then
+    return 0
+  fi
+  return 1
+}
+
 # Compare git URLs that differ only by a trailing slash or .git suffix.
 bundle_url_key() {
   local url="$1"
@@ -234,12 +294,12 @@ bundle_url_key() {
 # from a plugin directory whose origin remote matches. Returns 1 when none matches.
 bundle_plugin_id_for_url() {
   local url="$1" ledger_json="$2" key id source dir path remote
-  key=$(bundle_url_key "$url")
+  key=$(bundle_url_key "$(bundle_redact_url "$url")")
   while IFS= read -r id; do
     [[ -n $id ]] || continue
     source=$(jq -r --arg id "$id" '.plugins[$id].source // empty' <<<"$ledger_json")
     [[ -n $source ]] || continue
-    if [[ $(bundle_url_key "$source") == "$key" ]]; then
+    if [[ $(bundle_url_key "$(bundle_redact_url "$source")") == "$key" ]]; then
       printf '%s\n' "$id"
       return 0
     fi
@@ -252,7 +312,7 @@ bundle_plugin_id_for_url() {
     [[ -e $path/.git ]] || continue
     remote=$(git -C "$path" remote get-url origin 2>/dev/null || true)
     [[ -n $remote ]] || continue
-    if [[ $(bundle_url_key "$remote") == "$key" ]]; then
+    if [[ $(bundle_url_key "$(bundle_redact_url "$remote")") == "$key" ]]; then
       basename -- "$path"
       return 0
     fi
@@ -330,6 +390,8 @@ bundle_validate() {
   for field in id name version description; do
     jq -e --arg f "$field" '(.[$f] | type) == "string" and (.[$f] | length) > 0' "$manifest" >/dev/null \
       || bundle_fail "manifest '$field' must be a non-empty string"
+    value=$(jq -r --arg f "$field" '.[$f]' "$manifest")
+    bundle_no_controls "$value" || bundle_fail "manifest '$field' contains a control character"
   done
 
   bundle_id=$(jq -r '.id' "$manifest")
@@ -358,6 +420,7 @@ bundle_validate() {
 
   while IFS= read -r value; do
     [[ -n $value ]] || continue
+    bundle_no_controls "$value" || bundle_fail "plugin reference contains a control character"
     if bundle_git_url "$value"; then
       continue
     fi
@@ -366,6 +429,7 @@ bundle_validate() {
 
   while IFS= read -r value; do
     [[ -n $value ]] || continue
+    bundle_no_controls "$value" || bundle_fail "skill path contains a control character"
     bundle_safe_rel "$value" || bundle_fail "skill path must be a safe relative path: '$value'"
     [[ -d $dir/$value ]] || bundle_fail "skill folder not found: '$value'"
     [[ -f $dir/$value/SKILL.md ]] || bundle_fail "skill is missing SKILL.md: '$value'"
@@ -382,8 +446,10 @@ bundle_validate() {
       || bundle_fail "each config entry must be an object with source and target"
     source=$(jq -r '.source' <<<"$entry")
     target=$(jq -r '.target' <<<"$entry")
+    bundle_no_controls "$source" || bundle_fail "config source contains a control character"
     bundle_safe_rel "$source" || bundle_fail "config source must be a safe relative path: '$source'"
     [[ -f $dir/$source ]] || bundle_fail "config source not found: '$source'"
+    bundle_no_controls "$target" || bundle_fail "config target contains a control character"
     [[ -n $target && $target != *$'\n'* && $target != *".."* ]] || bundle_fail "invalid config target: '$target'"
     if [[ $target == /* ]]; then
       bundle_fail "config target must be relative or start with ~/: '$target'"
@@ -409,16 +475,20 @@ bundle_validate() {
     ' "$manifest" >/dev/null || bundle_fail "'project' must be an object with layout, and only root, layout, and create"
     while IFS= read -r value; do
       [[ -n $value ]] || continue
+      bundle_no_controls "$value" || bundle_fail "project layout path contains a control character"
       bundle_safe_rel "$value" || bundle_fail "project layout path must be a safe relative path: '$value'"
     done < <(jq -r '.project.layout[]' "$manifest")
     if jq -e '.project | has("create")' "$manifest" >/dev/null; then
       value=$(jq -r '.project.create' "$manifest")
+      bundle_no_controls "$value" || bundle_fail "project create path contains a control character"
       bundle_safe_rel "$value" || bundle_fail "project create path must be a safe relative path: '$value'"
       [[ -f $dir/$value ]] || bundle_fail "project create script not found: '$value'"
     fi
     if jq -e '.project | has("root")' "$manifest" >/dev/null; then
       jq -e '(.project.root | type) == "string" and (.project.root | length) > 0' "$manifest" >/dev/null \
         || bundle_fail "'project.root' must be a non-empty string"
+      value=$(jq -r '.project.root' "$manifest")
+      bundle_no_controls "$value" || bundle_fail "project root contains a control character"
     fi
   fi
 
@@ -426,6 +496,7 @@ bundle_validate() {
     jq -e '(.introduction | type) == "string" and (.introduction | length) > 0' "$manifest" >/dev/null \
       || bundle_fail "'introduction' must be a non-empty string"
     value=$(jq -r '.introduction' "$manifest")
+    bundle_no_controls "$value" || bundle_fail "introduction path contains a control character"
     bundle_safe_rel "$value" || bundle_fail "introduction path must be a safe relative path: '$value'"
     [[ -f $dir/$value ]] || bundle_fail "introduction file not found: '$value'"
   fi

@@ -207,25 +207,47 @@ if (( ${#repo_drop[@]} > 0 || ${#aur_drop[@]} > 0 )); then
   bundle_protect_owned_packages "${repo_drop[@]}" "${aur_drop[@]}"
 fi
 if (( ${#repo_drop[@]} > 0 )); then
-  omarchy-pkg-drop "${repo_drop[@]}"
+  if ! omarchy-pkg-drop "${repo_drop[@]}"; then
+    echo "Could not remove ${repo_drop[*]}; leaving those packages installed." >&2
+  fi
 fi
 if (( ${#aur_drop[@]} > 0 )); then
-  omarchy-pkg-aur-drop "${aur_drop[@]}"
+  if ! omarchy-pkg-aur-drop "${aur_drop[@]}"; then
+    echo "Could not remove ${aur_drop[*]}; leaving those packages installed." >&2
+  fi
 fi
 
 while IFS= read -r plugin_id; do
   [[ -n $plugin_id ]] || continue
+  recorded=$(jq -r --arg id "$plugin_id" '.plugins[$id].commit // empty' <<<"$ledger")
+  if bundle_plugin_present "$plugin_id" && bundle_plugin_changed "$plugin_id" "$recorded"; then
+    echo "Keeping plugin $plugin_id; it has local changes."
+    continue
+  fi
   if bundle_plugin_present "$plugin_id"; then
     omarchy-plugin-remove --yes -- "$plugin_id"
   fi
 done < <(jq -r '.plugins[] | select(.action == "drop") | .id' "$plan")
 
 while IFS= read -r path; do
-  [[ -n $path && -L $path ]] && rm -f -- "$path"
+  [[ -n $path && -L $path ]] || continue
+  expected=$(jq -r --arg path "$path" '.skills[$path].target // empty' <<<"$ledger")
+  if [[ -n $expected && $(readlink -- "$path") == "$expected" ]]; then
+    rm -f -- "$path"
+  else
+    echo "Keeping skill link $path; it no longer points at the bundle."
+  fi
 done < <(jq -r '.skills[] | select(.action == "drop") | .path' "$plan")
 
 while IFS= read -r target; do
-  [[ -n $target && -f $target && ! -L $target ]] && rm -f -- "$target"
+  [[ -n $target && -f $target && ! -L $target ]] || continue
+  expected=$(jq -r --arg target "$target" '.configs[$target].sha256 // empty' <<<"$ledger")
+  current=$(sha256sum -- "$target" | awk '{print $1}')
+  if [[ -n $expected && $current == "$expected" ]]; then
+    rm -f -- "$target"
+  else
+    echo "Keeping $target; it changed during removal."
+  fi
 done < <(jq -r '.configs[] | select(.action == "drop") | .target' "$plan")
 
 bundle_root=$(bundle_data_root)
