@@ -271,6 +271,91 @@ grep -Fx $'cycles\t48' <<<"$shell_output" >/dev/null ||
   fail "battery status reads cycle count from the first pack under DisplayDevice" "$shell_output"
 pass "battery status uses UPower DisplayDevice on dual-battery systems"
 
+# Packs under DisplayDevice can each stop at their own limit, so a combined
+# charge keeps UPower's time to full rather than the first pack's 60%.
+cat >"$tmp_dir/bin/upower" <<'STUB'
+#!/bin/bash
+
+if [[ $1 == "-e" ]]; then
+  echo "/org/freedesktop/UPower/devices/battery_CMB0"
+  echo "/org/freedesktop/UPower/devices/battery_CMB1"
+  echo "/org/freedesktop/UPower/devices/DisplayDevice"
+  exit 0
+fi
+
+if [[ $1 == "-i" ]]; then
+  if [[ $* == *DisplayDevice* ]]; then
+    cat <<'INFO'
+  native-path:          DisplayDevice
+  state:                charging
+  energy:               85.0 Wh
+  energy-full:          100.0 Wh
+  energy-rate:          10.0 W
+  time to full:         1.5 hours
+  percentage:           85%
+INFO
+  else
+    cat <<'INFO'
+  native-path:          CMB0
+  power supply:         yes
+  state:                charging
+  energy:               40.0 Wh
+  energy-full:          50.0 Wh
+  percentage:           80%
+INFO
+  fi
+  exit 0
+fi
+
+exit 1
+STUB
+chmod +x "$tmp_dir/bin/upower"
+
+shell_output=$(OMARCHY_POWER_SUPPLY_PATH="$tmp_dir/power" PATH="$tmp_dir/bin:$PATH" "$ROOT/bin/omarchy-battery-status" --shell)
+grep -Fx $'time\t1h 30m' <<<"$shell_output" >/dev/null ||
+  fail "dual-battery charging keeps UPower's combined time to full" "$shell_output"
+pass "dual-battery charging keeps UPower's combined time to full"
+
+# UPower prints numbers in the session's locale, and a decimal comma would
+# parse as a whole number: 21,6 W as 21 W.
+cat >"$tmp_dir/bin/upower" <<'STUB'
+#!/bin/bash
+
+if [[ $1 == "-e" ]]; then
+  echo "/org/freedesktop/UPower/devices/battery_BAT2"
+  exit 0
+fi
+
+if [[ $1 == "-i" ]]; then
+  if [[ ${LC_ALL:-} == "C" ]]; then
+    decimal="."
+  else
+    decimal=","
+  fi
+  cat <<INFO
+  native-path:          BAT2
+  power supply:         yes
+  state:                discharging
+  energy:               43${decimal}2 Wh
+  energy-full:          57${decimal}0 Wh
+  energy-rate:          21${decimal}6 W
+  time to empty:        2${decimal}0 hours
+  percentage:           75%
+INFO
+  exit 0
+fi
+
+exit 1
+STUB
+chmod +x "$tmp_dir/bin/upower"
+
+shell_output=$(LANG=de_DE.UTF-8 OMARCHY_POWER_SUPPLY_PATH="$tmp_dir/power" PATH="$tmp_dir/bin:$PATH" "$ROOT/bin/omarchy-battery-status" --shell)
+grep -Fx $'rate\t21.6W' <<<"$shell_output" >/dev/null ||
+  fail "battery status reads UPower's decimals whatever the locale" "$shell_output"
+grep -Fx $'time\t2h' <<<"$shell_output" >/dev/null ||
+  fail "battery status works the time out from UPower's decimals whatever the locale" "$shell_output"
+pass "battery status reads UPower's decimals whatever the locale"
+
 # DisplayDevice exists on desktops with no pack. Combined-capacity display is
 # only meaningful when a BAT* device is also enumerated.
 cat >"$tmp_dir/bin/upower" <<'STUB'
