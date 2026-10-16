@@ -45,6 +45,9 @@ USAGE
   esac
 done
 
+if (( dry_run == 0 )); then
+  bundle_ledger_lock
+fi
 ledger=$(bundle_ledger_read)
 
 if [[ -z $bundle_id ]]; then

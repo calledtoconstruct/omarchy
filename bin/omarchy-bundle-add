@@ -84,11 +84,17 @@ cleanup() {
     rm -rf -- "$dest"
   fi
   if (( committed == 0 )); then
-    if (( ${#rollback_aur[@]} > 0 )); then
-      omarchy-pkg-aur-drop "${rollback_aur[@]}" >/dev/null 2>&1 || true
-    fi
-    if (( ${#rollback_repo[@]} > 0 )); then
-      omarchy-pkg-drop "${rollback_repo[@]}" >/dev/null 2>&1 || true
+    if (( ${#rollback_aur[@]} > 0 || ${#rollback_repo[@]} > 0 )); then
+      # Skip the drop when the explicit mark fails. -Rns would otherwise
+      # remove a dependency that another bundle still owns.
+      if bundle_protect_owned_packages "${rollback_repo[@]}" "${rollback_aur[@]}"; then
+        if (( ${#rollback_aur[@]} > 0 )); then
+          omarchy-pkg-aur-drop "${rollback_aur[@]}" >/dev/null 2>&1 || true
+        fi
+        if (( ${#rollback_repo[@]} > 0 )); then
+          omarchy-pkg-drop "${rollback_repo[@]}" >/dev/null 2>&1 || true
+        fi
+      fi
     fi
   fi
   rm -rf -- "$workdir"
@@ -123,6 +129,9 @@ bundle_validate "$bundle_dir"
 id=$(jq -r '.id' "$bundle_dir/bundle.json")
 name=$(jq -r '.name' "$bundle_dir/bundle.json")
 version=$(jq -r '.version' "$bundle_dir/bundle.json")
+if (( dry_run == 0 )); then
+  bundle_ledger_lock
+fi
 ledger=$(bundle_ledger_read)
 if jq -e --arg id "$id" '.bundles[$id] != null' <<<"$ledger" >/dev/null; then
   bundle_fail "bundle '$id' is already installed"
@@ -197,16 +206,31 @@ done < <(jq -r '.aurPackages[]' "$bundle_dir/bundle.json")
 
 while IFS= read -r plugin; do
   [[ -n $plugin ]] || continue
+  resolved_id=""
   if bundle_git_url "$plugin"; then
-    action=add
-    user_owned=false
-    note="install"
+    if resolved_id=$(bundle_plugin_id_for_url "$plugin" "$ledger") && bundle_plugin_present "$resolved_id"; then
+      action=keep
+      if jq -e --arg id "$resolved_id" '.plugins[$id] != null' <<<"$ledger" >/dev/null; then
+        user_owned=$(jq -r --arg id "$resolved_id" '.plugins[$id].user_owned' <<<"$ledger")
+        note="already present"
+      else
+        user_owned=true
+        note="already present, installed by you"
+      fi
+    else
+      action=add
+      user_owned=false
+      note="install"
+      resolved_id=""
+    fi
   elif jq -e --arg id "$plugin" '.plugins[$id] != null' <<<"$ledger" >/dev/null; then
     action=keep
+    resolved_id=$plugin
     user_owned=$(jq -r --arg id "$plugin" '.plugins[$id].user_owned' <<<"$ledger")
     note="already present"
   elif bundle_plugin_present "$plugin"; then
     action=keep
+    resolved_id=$plugin
     user_owned=true
     note="already present, installed by you"
   else
@@ -214,8 +238,9 @@ while IFS= read -r plugin; do
   fi
   # shellcheck disable=SC2016
   append_plan \
-    --arg source "$plugin" --arg action "$action" --arg note "$note" --argjson user_owned "$user_owned" \
-    '.plugins += [{source:$source, action:$action, note:$note, user_owned:$user_owned}]'
+    --arg source "$plugin" --arg id "$resolved_id" --arg action "$action" --arg note "$note" \
+    --argjson user_owned "$user_owned" \
+    '.plugins += [{source:$source, id:$id, action:$action, note:$note, user_owned:$user_owned}]'
 done < <(jq -r '.plugins[]' "$bundle_dir/bundle.json")
 
 mapfile -t skill_dirs < <(bundle_skill_dirs)
@@ -379,16 +404,29 @@ while IFS= read -r row; do
       plugin_add_args+=(--enable)
     fi
     plugin_add_args+=(-- "$plugin_source")
-    output=$(omarchy-plugin-add "${plugin_add_args[@]}") || bundle_fail "failed to add plugin $plugin_source"
+    set +e
+    output=$(omarchy-plugin-add "${plugin_add_args[@]}")
+    plugin_status=$?
+    set -e
     plugin_id=$(sed -n 's/^Added \([^ ][^ ]*\) into .*/\1/p' <<<"$output" | head -n 1)
-    [[ -n $plugin_id ]] || bundle_fail "could not read the id omarchy-plugin-add installed for $plugin_source"
     user_owned=false
-  else
-    plugin_id=$plugin_source
+    # Record the id before failing. plugin-add moves the plugin into place
+    # and prints Added before rescan and enable, and cleanup only removes
+    # ids already listed here.
+    if [[ -n $plugin_id ]]; then
+      jq --arg id "$plugin_id" --arg source "$plugin_source" --argjson user_owned "$user_owned" --argjson added true \
+        '. += [{id:$id, source:$source, user_owned:$user_owned, added:$added}]' "$resolved" >"$resolved.next"
+      mv -f -- "$resolved.next" "$resolved"
+    fi
+    if (( plugin_status != 0 )); then
+      bundle_fail "failed to add plugin $plugin_source"
+    fi
+    [[ -n $plugin_id ]] || bundle_fail "could not read the id omarchy-plugin-add installed for $plugin_source"
+    continue
   fi
-  added=false
-  [[ $action == add ]] && added=true
-  jq --arg id "$plugin_id" --arg source "$plugin_source" --argjson user_owned "$user_owned" --argjson added "$added" \
+  plugin_id=$(jq -r '.id // empty' <<<"$row")
+  [[ -n $plugin_id ]] || plugin_id=$plugin_source
+  jq --arg id "$plugin_id" --arg source "$plugin_source" --argjson user_owned "$user_owned" --argjson added false \
     '. += [{id:$id, source:$source, user_owned:$user_owned, added:$added}]' "$resolved" >"$resolved.next"
   mv -f -- "$resolved.next" "$resolved"
 done < <(jq -c '.plugins[]' "$plan")

@@ -361,6 +361,11 @@ assertDeepEqual(
   ],
   'menu keeps the Remove category order'
 )
+assertEqual(
+  defaultById['remove.bundle'].when,
+  '[[ -n $(find "${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-bundles" -mindepth 1 -maxdepth 1 -type d -print -quit 2>/dev/null) ]]',
+  'menu looks for installed bundles in the same data root the bundle commands use'
+)
 assert(
   defaultById['setup.security.passwordless-sudo'].action.includes('omarchy-sudo-passwordless'),
   'menu places Passwordless Sudo under Setup > Security'

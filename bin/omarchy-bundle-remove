@@ -46,6 +46,9 @@ USAGE
   esac
 done
 
+if (( dry_run == 0 )); then
+  bundle_ledger_lock
+fi
 ledger=$(bundle_ledger_read)
 
 if [[ -z $bundle_id ]]; then
@@ -200,6 +203,9 @@ bundle_confirm "Remove this bundle?" || bundle_fail "aborted"
 
 mapfile -t repo_drop < <(jq -r '.packages[] | select(.action == "drop" and .source != "aur") | .name' "$plan")
 mapfile -t aur_drop < <(jq -r '.packages[] | select(.action == "drop" and .source == "aur") | .name' "$plan")
+if (( ${#repo_drop[@]} > 0 || ${#aur_drop[@]} > 0 )); then
+  bundle_protect_owned_packages "${repo_drop[@]}" "${aur_drop[@]}"
+fi
 if (( ${#repo_drop[@]} > 0 )); then
   omarchy-pkg-drop "${repo_drop[@]}"
 fi

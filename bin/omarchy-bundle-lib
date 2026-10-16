@@ -143,6 +143,16 @@ bundle_ledger_write() {
   mv -f -- "$tmp" "$path"
 }
 
+# Hold this from the ledger read through the final write. The lock drops when
+# the command exits, which includes a failed install's cleanup.
+bundle_ledger_lock() {
+  local dir
+  dir=$(dirname -- "$(bundle_ledger_path)")
+  mkdir -p -- "$dir"
+  exec {BUNDLE_LOCK_FD}>>"$dir/ledger.lock"
+  flock "$BUNDLE_LOCK_FD"
+}
+
 bundle_tree_sha256() {
   local dir="$1" hash
   hash=$(
@@ -212,6 +222,70 @@ bundle_plugin_present() {
   [[ -e $dir/$id || -L $dir/$id ]]
 }
 
+# Compare git URLs that differ only by a trailing slash or .git suffix.
+bundle_url_key() {
+  local url="$1"
+  url="${url%/}"
+  url="${url%.git}"
+  printf '%s\n' "$url"
+}
+
+# Print the id of an installed plugin for this git URL, from the ledger or
+# from a plugin directory whose origin remote matches. Returns 1 when none matches.
+bundle_plugin_id_for_url() {
+  local url="$1" ledger_json="$2" key id source dir path remote
+  key=$(bundle_url_key "$url")
+  while IFS= read -r id; do
+    [[ -n $id ]] || continue
+    source=$(jq -r --arg id "$id" '.plugins[$id].source // empty' <<<"$ledger_json")
+    [[ -n $source ]] || continue
+    if [[ $(bundle_url_key "$source") == "$key" ]]; then
+      printf '%s\n' "$id"
+      return 0
+    fi
+  done < <(jq -r '.plugins // {} | keys[]' <<<"$ledger_json")
+  dir=$(bundle_plugins_dir)
+  [[ -d $dir ]] || return 1
+  for path in "$dir"/*; do
+    [[ -e $path || -L $path ]] || continue
+    [[ -d $path || -L $path ]] || continue
+    [[ -e $path/.git ]] || continue
+    remote=$(git -C "$path" remote get-url origin 2>/dev/null || true)
+    [[ -n $remote ]] || continue
+    if [[ $(bundle_url_key "$remote") == "$key" ]]; then
+      basename -- "$path"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# pacman -Rns removes dependencies that are not explicit. A library another
+# bundle still owns can be one of those dependencies, so mark it explicit
+# before that drop. Names in the drop list are left alone; the drop removes
+# those packages themselves.
+bundle_protect_owned_packages() {
+  local ledger_json="${ledger:-}" name pkg
+  local -a protect=()
+  local -A dropping=()
+  [[ -n $ledger_json ]] || return 0
+  for pkg in "$@"; do
+    [[ -n $pkg ]] && dropping[$pkg]=1
+  done
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    [[ -n ${dropping[$name]:-} ]] && continue
+    bundle_package_present "$name" || continue
+    protect+=("$name")
+  done < <(jq -r '.packages // {} | keys[]' <<<"$ledger_json")
+  (( ${#protect[@]} > 0 )) || return 0
+  if (( EUID == 0 )); then
+    pacman -D --asexplicit -- "${protect[@]}"
+  else
+    sudo pacman -D --asexplicit -- "${protect[@]}"
+  fi
+}
+
 bundle_config_target() {
   local target="$1" expanded home
   expanded=$(bundle_expand_home "$target")
@@ -227,7 +301,8 @@ bundle_config_target() {
 # Allowed top-level keys. packageType is optional so a bundle can later be a
 # registry package beside plugin and theme; when present it must be "bundle".
 bundle_validate() {
-  local dir="$1" manifest link field value entry source target
+  local dir="$1" manifest link field value entry source target bundle_id link_name expanded
+  local -A seen_links=() seen_targets=()
   [[ -n $dir && -d $dir ]] || bundle_fail "bundle folder not found: ${dir:-<none>}"
   manifest="$dir/bundle.json"
   [[ -f $manifest ]] || bundle_fail "missing bundle.json in $dir"
@@ -257,8 +332,8 @@ bundle_validate() {
       || bundle_fail "manifest '$field' must be a non-empty string"
   done
 
-  value=$(jq -r '.id' "$manifest")
-  bundle_valid_id "$value" || bundle_fail "invalid bundle id '$value'"
+  bundle_id=$(jq -r '.id' "$manifest")
+  bundle_valid_id "$bundle_id" || bundle_fail "invalid bundle id '$bundle_id'"
 
   for field in packages aurPackages plugins skills conflicts; do
     jq -e --arg f "$field" '(.[$f] | type) == "array"' "$manifest" >/dev/null \
@@ -294,6 +369,11 @@ bundle_validate() {
     bundle_safe_rel "$value" || bundle_fail "skill path must be a safe relative path: '$value'"
     [[ -d $dir/$value ]] || bundle_fail "skill folder not found: '$value'"
     [[ -f $dir/$value/SKILL.md ]] || bundle_fail "skill is missing SKILL.md: '$value'"
+    link_name="${bundle_id}-$(basename -- "$value")"
+    if [[ -n ${seen_links[$link_name]:-} ]]; then
+      bundle_fail "skill folders share the link name '$link_name'"
+    fi
+    seen_links[$link_name]=1
   done < <(jq -r '.skills[]' "$manifest")
 
   while IFS= read -r entry; do
@@ -308,6 +388,12 @@ bundle_validate() {
     if [[ $target == /* ]]; then
       bundle_fail "config target must be relative or start with ~/: '$target'"
     fi
+    expanded=$(bundle_config_target "$target") \
+      || bundle_fail "config target must stay under your home directory: '$target'"
+    if [[ -n ${seen_targets[$expanded]:-} ]]; then
+      bundle_fail "config entries resolve to the same target: $expanded"
+    fi
+    seen_targets[$expanded]=1
   done < <(jq -c '.config[]' "$manifest")
 
   while IFS= read -r value; do

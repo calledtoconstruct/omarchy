@@ -83,6 +83,12 @@ exit 1
 EOF
 done
 
+cat >"$stub_dir/sudo" <<'EOF'
+#!/bin/bash
+printf 'sudo %s\n' "$*" >>"$HOME/calls.log"
+exec "$@"
+EOF
+
 chmod +x "$stub_dir"/*
 
 new_home() {
@@ -645,3 +651,263 @@ shopt -u nullglob
 (( ${#backups[@]} == 0 )) || fail "dry-run reset does not write a backup" "$(ls -la "$home/.config")"
 grep -q 'Dry run: nothing was reset.' <<<"$output" || fail "dry-run reset says nothing was reset" "$output"
 pass "dry-run reset changes nothing"
+
+# A second bundle that names the same plugin git URL keeps the installed plugin.
+home=$(new_home plugin-reuse)
+write_bundle "$home/plug-a" plug-a "Plug A" '[]'
+write_bundle "$home/plug-b" plug-b "Plug B" '[]'
+jq '.plugins = ["https://example.test/gamemode-switcher.git"]' \
+  "$home/plug-a/bundle.json" >"$home/plug-a/bundle.json.next"
+mv "$home/plug-a/bundle.json.next" "$home/plug-a/bundle.json"
+cp "$home/plug-a/bundle.json" "$home/plug-b/bundle.json.next"
+jq '.id = "plug-b" | .name = "Plug B"' "$home/plug-b/bundle.json.next" >"$home/plug-b/bundle.json"
+rm -f "$home/plug-b/bundle.json.next"
+mkdir -p "$home/bin"
+cat >"$home/bin/omarchy-plugin-add" <<'EOF'
+#!/bin/bash
+printf 'omarchy-plugin-add %s\n' "$*" >>"$HOME/calls.log"
+echo "Added example.plugin into $HOME/.config/omarchy/plugins/example.plugin"
+mkdir -p "$HOME/.config/omarchy/plugins/example.plugin"
+exit 0
+EOF
+chmod +x "$home/bin/omarchy-plugin-add"
+HOME="$home" \
+  XDG_DATA_HOME="$home/.local/share" \
+  XDG_STATE_HOME="$home/.local/state" \
+  XDG_CONFIG_HOME="$home/.config" \
+  PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+  "$ROOT/bin/omarchy-bundle-add" --yes "$home/plug-a" >/dev/null
+HOME="$home" \
+  XDG_DATA_HOME="$home/.local/share" \
+  XDG_STATE_HOME="$home/.local/state" \
+  XDG_CONFIG_HOME="$home/.config" \
+  PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+  "$ROOT/bin/omarchy-bundle-add" --yes "$home/plug-b" >/dev/null
+adds=$(grep -c 'omarchy-plugin-add ' "$home/calls.log" || true)
+(( adds == 1 )) || fail "a shared plugin URL was added twice" "$(cat "$home/calls.log")"
+jq -e '
+  .plugins["example.plugin"].user_owned == false
+  and ((.plugins["example.plugin"].owners | sort) == ["plug-a", "plug-b"])
+  and .plugins["example.plugin"].source == "https://example.test/gamemode-switcher.git"
+' "$home/.local/state/omarchy/bundles/ledger.json" >/dev/null \
+  || fail "both bundles own the plugin that was already installed" "$(cat "$home/.local/state/omarchy/bundles/ledger.json")"
+pass "a second bundle keeps a plugin git URL that is already installed"
+
+# A plugin you installed yourself is kept when a bundle names its git URL.
+home=$(new_home plugin-yours)
+plugin_dir="$home/.config/omarchy/plugins/example.plugin"
+mkdir -p "$plugin_dir"
+git -C "$plugin_dir" init -q
+git -C "$plugin_dir" remote add origin "https://example.test/gamemode-switcher.git"
+write_bundle "$home/plug" plug-yours "Plug Yours" '[]'
+jq '.plugins = ["https://example.test/gamemode-switcher"]' \
+  "$home/plug/bundle.json" >"$home/plug/bundle.json.next"
+mv "$home/plug/bundle.json.next" "$home/plug/bundle.json"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/plug" >/dev/null
+if [[ -f $home/calls.log ]] && grep -q 'omarchy-plugin-add ' "$home/calls.log"; then
+  fail "a bundle tried to add a plugin that is already installed" "$(cat "$home/calls.log")"
+fi
+jq -e '
+  .plugins["example.plugin"].user_owned == true
+  and .plugins["example.plugin"].owners == ["plug-yours"]
+' "$home/.local/state/omarchy/bundles/ledger.json" >/dev/null \
+  || fail "a preinstalled plugin is recorded as yours" "$(cat "$home/.local/state/omarchy/bundles/ledger.json")"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-remove" --yes plug-yours >/dev/null
+if [[ -f $home/calls.log ]] && grep -q 'omarchy-plugin-remove ' "$home/calls.log"; then
+  fail "removing the bundle removed a plugin you installed" "$(cat "$home/calls.log")"
+fi
+[[ -d $plugin_dir ]] || fail "the preinstalled plugin directory was removed"
+pass "a bundle keeps a plugin you installed from the same git URL"
+
+# A plugin that prints Added and then fails is removed with the rest of the install.
+home=$(new_home plugin-added-fail)
+write_bundle "$home/plug" plug-added-fail "Plug Added Fail" '["failpkg"]'
+jq '.plugins = ["https://example.test/gamemode-switcher.git"]' \
+  "$home/plug/bundle.json" >"$home/plug/bundle.json.next"
+mv "$home/plug/bundle.json.next" "$home/plug/bundle.json"
+mkdir -p "$home/bin"
+cat >"$home/bin/omarchy-plugin-add" <<'EOF'
+#!/bin/bash
+printf 'omarchy-plugin-add %s\n' "$*" >>"$HOME/calls.log"
+echo "Added demo.plugin into $HOME/.config/omarchy/plugins/demo.plugin"
+exit 1
+EOF
+chmod +x "$home/bin/omarchy-plugin-add"
+if output=$(
+  HOME="$home" \
+    XDG_DATA_HOME="$home/.local/share" \
+    XDG_STATE_HOME="$home/.local/state" \
+    XDG_CONFIG_HOME="$home/.config" \
+    PATH="$home/bin:$stub_dir:$ROOT/bin:$PATH" \
+    "$ROOT/bin/omarchy-bundle-add" --yes "$home/plug" 2>&1
+); then
+  fail "a plugin that fails after Added still installed the bundle" "$output"
+fi
+calls_have "$home" "omarchy-plugin-remove --yes -- demo.plugin" \
+  || fail "a plugin that landed on disk is removed when enable fails" "$(cat "$home/calls.log")"
+[[ ! -e $home/.local/state/omarchy/bundles/ledger.json ]] || fail "a failed plugin install wrote a ledger"
+pass "a plugin that fails after it is added is rolled back"
+
+# pacman -Rns must not delete a library that another bundle still owns.
+home=$(new_home dep-protect)
+printf 'libbar\n' >"$home/installed.list"
+write_bundle "$home/owner" lib-owner "Lib Owner" '["libbar"]'
+write_bundle "$home/app" app-owner "App Owner" '["app"]'
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/owner" >/dev/null
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/app" >/dev/null
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-remove" --yes app-owner >/dev/null
+grep -qxF -- '-D --asexplicit -- libbar' "$home/pacman-calls.log" \
+  || fail "a package another bundle owns is marked explicit before drop" "$(cat "$home/pacman-calls.log")"
+calls_have "$home" "omarchy-pkg-drop app" || fail "the removed bundle drops its own package" "$(cat "$home/calls.log")"
+if grep -q 'omarchy-pkg-drop libbar' "$home/calls.log"; then
+  fail "a package another bundle owns was passed to drop" "$(cat "$home/calls.log")"
+fi
+grep -qxF libbar "$home/installed.list" || fail "the shared library is still installed" "$(cat "$home/installed.list")"
+pass "removing a bundle marks packages another bundle owns before pacman -Rns"
+
+# An install that rolls back also marks packages another bundle still owns.
+home=$(new_home dep-rollback)
+printf 'libbar\n' >"$home/installed.list"
+write_bundle "$home/owner" lib-owner "Lib Owner" '["libbar"]'
+write_bundle "$home/plug" roll-owner "Roll Owner" '["failpkg"]'
+jq '.plugins = ["https://example.test/gamemode-switcher.git"]' \
+  "$home/plug/bundle.json" >"$home/plug/bundle.json.next"
+mv "$home/plug/bundle.json.next" "$home/plug/bundle.json"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/owner" >/dev/null
+if output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/plug" 2>&1); then
+  fail "the failing bundle was installed" "$output"
+fi
+grep -qxF -- '-D --asexplicit -- libbar' "$home/pacman-calls.log" \
+  || fail "rollback marks packages another bundle owns before drop" "$(cat "$home/pacman-calls.log")"
+calls_have "$home" "omarchy-pkg-drop failpkg" || fail "rollback drops the package from the failed install" "$(cat "$home/calls.log")"
+if grep -q 'omarchy-pkg-drop libbar' "$home/calls.log"; then
+  fail "rollback dropped a package another bundle owns" "$(cat "$home/calls.log")"
+fi
+grep -qxF libbar "$home/installed.list" || fail "the other bundle's package stayed installed" "$(cat "$home/installed.list")"
+jq -e '.bundles["lib-owner"] != null and .bundles["roll-owner"] == null' \
+  "$home/.local/state/omarchy/bundles/ledger.json" >/dev/null \
+  || fail "rollback left the failed bundle in the ledger" "$(cat "$home/.local/state/omarchy/bundles/ledger.json")"
+pass "an install rollback marks packages another bundle owns before drop"
+
+# Two config entries that land on one file are refused before anything is copied.
+home=$(new_home config-dup)
+dir="$home/cfg"
+write_bundle "$dir" cfg-dup "Cfg Dup" '[]'
+mkdir -p "$dir/config"
+printf 'a\n' >"$dir/config/a.txt"
+printf 'b\n' >"$dir/config/b.txt"
+jq '.config = [
+  {"source":"config/a.txt","target":"~/.config/note.txt"},
+  {"source":"config/b.txt","target":".config/note.txt"}
+]' "$dir/bundle.json" >"$dir/bundle.json.next"
+mv "$dir/bundle.json.next" "$dir/bundle.json"
+if output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$dir" 2>&1); then
+  fail "install accepted two config entries for one target" "$output"
+fi
+grep -q 'same target' <<<"$output" || fail "install names the shared config target" "$output"
+[[ ! -e $home/.config/note.txt ]] || fail "a refused bundle copied a config file"
+[[ ! -e $home/.local/state/omarchy/bundles/ledger.json ]] || fail "a refused bundle wrote a ledger"
+pass "two config entries for one target are refused"
+
+# Two skill folders that share a final link name are refused.
+home=$(new_home skill-dup)
+dir="$home/skills-bundle"
+write_bundle "$dir" skill-dup "Skill Dup" '[]'
+mkdir -p "$dir/skills/frontend/setup" "$dir/skills/backend/setup"
+printf '# setup\n' >"$dir/skills/frontend/setup/SKILL.md"
+printf '# setup\n' >"$dir/skills/backend/setup/SKILL.md"
+jq '.skills = ["skills/frontend/setup", "skills/backend/setup"]' \
+  "$dir/bundle.json" >"$dir/bundle.json.next"
+mv "$dir/bundle.json.next" "$dir/bundle.json"
+if output=$(run_bundle "$home" "$ROOT/bin/omarchy-bundle-validate" "$dir" 2>&1); then
+  fail "validate accepted two skills that share a link name" "$output"
+fi
+grep -q 'skill-dup-setup' <<<"$output" || fail "validate names the shared skill link" "$output"
+pass "two skills that share a link name are refused"
+
+# A command waits for the ledger lock, then sees the bundle written while it waited.
+home=$(new_home ledger-lock)
+write_bundle "$home/first" held-bundle "Held" '[]'
+write_bundle "$home/second" second-bundle "Second" '[]'
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/first" >/dev/null
+lock="$home/.local/state/omarchy/bundles/ledger.lock"
+flock "$lock" bash -c '
+  echo holding >"'"$home"'/lock-state"
+  while [[ ! -f "'"$home"'/release-lock" ]]; do sleep 0.05; done
+' &
+holder=$!
+for _ in $(seq 1 50); do
+  [[ -f $home/lock-state ]] && break
+  sleep 0.05
+done
+[[ -f $home/lock-state ]] || fail "the lock holder did not start"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/second" >"$home/second.out" 2>&1 &
+adder=$!
+sleep 0.3
+if jq -e '.bundles["second-bundle"] != null' "$home/.local/state/omarchy/bundles/ledger.json" >/dev/null 2>&1; then
+  touch "$home/release-lock"
+  wait "$holder" || true
+  wait "$adder" || true
+  fail "the second add wrote the ledger while the lock was held" "$(cat "$home/second.out")"
+fi
+if ! kill -0 "$adder" 2>/dev/null; then
+  touch "$home/release-lock"
+  wait "$holder" || true
+  fail "the second add exited while the ledger lock was held" "$(cat "$home/second.out")"
+fi
+touch "$home/release-lock"
+wait "$holder"
+wait "$adder"
+jq -e '.bundles["held-bundle"] != null and .bundles["second-bundle"] != null' \
+  "$home/.local/state/omarchy/bundles/ledger.json" >/dev/null \
+  || fail "the waiting add did not keep the bundle written while it waited" "$(cat "$home/.local/state/omarchy/bundles/ledger.json")"
+pass "a bundle command waits for the ledger lock"
+
+# Dry-run remove and reset do not take the ledger lock.
+home=$(new_home lock-dry)
+write_config_bundle "$home/cfg" cfg-bundle "from-bundle"
+run_bundle "$home" "$ROOT/bin/omarchy-bundle-add" --yes "$home/cfg" >/dev/null
+lock="$home/.local/state/omarchy/bundles/ledger.lock"
+flock "$lock" bash -c '
+  echo holding >"'"$home"'/lock-state"
+  while [[ ! -f "'"$home"'/release-lock" ]]; do sleep 0.05; done
+' &
+holder=$!
+for _ in $(seq 1 50); do
+  [[ -f $home/lock-state ]] && break
+  sleep 0.05
+done
+[[ -f $home/lock-state ]] || fail "the dry-run lock holder did not start"
+status=0
+timeout 2s env \
+  HOME="$home" \
+  XDG_DATA_HOME="$home/.local/share" \
+  XDG_STATE_HOME="$home/.local/state" \
+  XDG_CONFIG_HOME="$home/.config" \
+  PATH="$stub_dir:$ROOT/bin:$PATH" \
+  "$ROOT/bin/omarchy-bundle-remove" --dry-run --yes cfg-bundle >/dev/null 2>"$home/dry.err" || status=$?
+if (( status == 124 )); then
+  touch "$home/release-lock"
+  wait "$holder" || true
+  fail "dry-run remove waited on the ledger lock"
+fi
+(( status == 0 )) || {
+  touch "$home/release-lock"
+  wait "$holder" || true
+  fail "dry-run remove failed while the ledger lock was held" "$(cat "$home/dry.err")"
+}
+status=0
+timeout 2s env \
+  HOME="$home" \
+  XDG_DATA_HOME="$home/.local/share" \
+  XDG_STATE_HOME="$home/.local/state" \
+  XDG_CONFIG_HOME="$home/.config" \
+  PATH="$stub_dir:$ROOT/bin:$PATH" \
+  "$ROOT/bin/omarchy-bundle-reset" --dry-run --yes cfg-bundle >/dev/null 2>"$home/dry-reset.err" || status=$?
+touch "$home/release-lock"
+wait "$holder"
+if (( status == 124 )); then
+  fail "dry-run reset waited on the ledger lock"
+fi
+(( status == 0 )) || fail "dry-run reset failed while the ledger lock was held" "$(cat "$home/dry-reset.err")"
+pass "dry-run remove and reset do not take the ledger lock"
