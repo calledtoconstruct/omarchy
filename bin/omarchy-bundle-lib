@@ -99,19 +99,19 @@ bundle_git_url() {
 bundle_classify_source() {
   local spec="$1" expanded
   expanded=$(bundle_expand_home "$spec")
-  # A git URL is also a relative path: https://host/repo.git names the
+  # An explicit URL is also a relative path: https://host/repo.git names the
   # directory https:/host/repo.git. That directory must not skip the clone.
-  # ./relative, absolute, and ~/ paths stay local folders.
-  if [[ $spec == ./* || $spec == /* || $spec == "~" || $spec == "~/"* ]]; then
-    if [[ -d $expanded ]]; then
-      printf '%s\n' path
-      return 0
-    fi
-  elif bundle_git_url "$spec"; then
+  # An existing folder, including one named demo.git, stays a local install.
+  if [[ $spec =~ :// || $spec == git@* ]]; then
     printf '%s\n' git
     return 0
-  elif [[ -d $expanded ]]; then
+  fi
+  if [[ -d $expanded ]]; then
     printf '%s\n' path
+    return 0
+  fi
+  if bundle_git_url "$spec"; then
+    printf '%s\n' git
     return 0
   fi
   if bundle_registry_ref "$spec"; then

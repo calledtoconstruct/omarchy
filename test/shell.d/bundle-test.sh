@@ -1199,6 +1199,35 @@ grep -q 'git clone -- https://example.test/repo.git' "$home/git.log" \
   || fail "a shadowed git URL was not cloned" "$(cat "$home/git.log" 2>/dev/null)"
 pass "a git URL is cloned even when a relative directory has that shape"
 
+# An existing folder named *.git is installed from its working tree.
+home=$(new_home local-git-dir)
+write_bundle "$home/work/demo.git" local-git "Local Git" '[]'
+printf 'working-tree\n' >"$home/work/demo.git/extra.txt"
+mkdir -p "$home/git-bin"
+cat >"$home/git-bin/git" <<'EOF'
+#!/bin/bash
+printf 'git %s\n' "$*" >>"$HOME/git.log"
+exit 1
+EOF
+chmod +x "$home/git-bin/git"
+output=$(
+  cd "$home/work" && \
+    HOME="$home" \
+    XDG_DATA_HOME="$home/.local/share" \
+    XDG_STATE_HOME="$home/.local/state" \
+    XDG_CONFIG_HOME="$home/.config" \
+    PATH="$home/git-bin:$stub_dir:$ROOT/bin:$PATH" \
+    "$ROOT/bin/omarchy-bundle-add" --yes demo.git 2>&1
+) || fail "an existing .git folder was not installed" "$output"
+if [[ -f $home/git.log ]] && grep -q 'git clone' "$home/git.log"; then
+  fail "an existing .git folder was cloned" "$(cat "$home/git.log")"
+fi
+[[ $(<"$home/.local/share/omarchy-bundles/local-git/extra.txt") == working-tree ]] \
+  || fail "the folder's working tree was not installed" "$(ls -la "$home/.local/share/omarchy-bundles/local-git" 2>/dev/null)"
+jq -e '.bundles["local-git"] != null' "$home/.local/state/omarchy/bundles/ledger.json" >/dev/null \
+  || fail "the local .git folder was not recorded" "$(cat "$home/.local/state/omarchy/bundles/ledger.json")"
+pass "an existing folder named .git is installed as a local bundle"
+
 # A kept plugin is named by its id, and a credential in a git URL is not stored.
 home=$(new_home redact)
 plugin_dir="$home/.config/omarchy/plugins/example.plugin"
