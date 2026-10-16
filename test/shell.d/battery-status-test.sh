@@ -284,14 +284,19 @@ if [[ $1 == "-e" ]]; then
 fi
 
 if [[ $1 == "-i" ]]; then
+  if [[ ${LC_ALL:-} == "C" ]]; then
+    decimal="."
+  else
+    decimal=","
+  fi
   if [[ $* == *DisplayDevice* ]]; then
-    cat <<'INFO'
+    cat <<INFO
   native-path:          DisplayDevice
   state:                charging
-  energy:               85.0 Wh
-  energy-full:          100.0 Wh
-  energy-rate:          10.0 W
-  time to full:         1.5 hours
+  energy:               85${decimal}0 Wh
+  energy-full:          100${decimal}0 Wh
+  energy-rate:          10${decimal}0 W
+  time to full:         ${OMARCHY_TEST_TIME_TO_FULL:-1${decimal}5 hours}
   percentage:           85%
 INFO
   else
@@ -311,9 +316,14 @@ exit 1
 STUB
 chmod +x "$tmp_dir/bin/upower"
 
-shell_output=$(OMARCHY_POWER_SUPPLY_PATH="$tmp_dir/power" PATH="$tmp_dir/bin:$PATH" "$ROOT/bin/omarchy-battery-status" --shell)
+shell_output=$(LC_ALL=de_DE.UTF-8 OMARCHY_POWER_SUPPLY_PATH="$tmp_dir/power" PATH="$tmp_dir/bin:$PATH" "$ROOT/bin/omarchy-battery-status" --shell)
 grep -Fx $'time\t1h 30m' <<<"$shell_output" >/dev/null ||
   fail "dual-battery charging keeps UPower's combined time to full" "$shell_output"
+
+# UPower counts a short wait in seconds, not hours.
+shell_output=$(OMARCHY_TEST_TIME_TO_FULL="45 seconds" OMARCHY_POWER_SUPPLY_PATH="$tmp_dir/power" PATH="$tmp_dir/bin:$PATH" "$ROOT/bin/omarchy-battery-status" --shell)
+grep -Fx $'time\t1m' <<<"$shell_output" >/dev/null ||
+  fail "UPower's time in seconds reads as seconds" "$shell_output"
 pass "dual-battery charging keeps UPower's combined time to full"
 
 # UPower prints numbers in the session's locale, and a decimal comma would
@@ -349,7 +359,7 @@ exit 1
 STUB
 chmod +x "$tmp_dir/bin/upower"
 
-shell_output=$(LANG=de_DE.UTF-8 OMARCHY_POWER_SUPPLY_PATH="$tmp_dir/power" PATH="$tmp_dir/bin:$PATH" "$ROOT/bin/omarchy-battery-status" --shell)
+shell_output=$(LC_ALL=de_DE.UTF-8 OMARCHY_POWER_SUPPLY_PATH="$tmp_dir/power" PATH="$tmp_dir/bin:$PATH" "$ROOT/bin/omarchy-battery-status" --shell)
 grep -Fx $'rate\t21.6W' <<<"$shell_output" >/dev/null ||
   fail "battery status reads UPower's decimals whatever the locale" "$shell_output"
 grep -Fx $'time\t2h' <<<"$shell_output" >/dev/null ||
